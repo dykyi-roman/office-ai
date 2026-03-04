@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+
+  <rect x="1" y="3" width="22" height="18" rx="3" ry="3"
+    fill="#212121" stroke="#424242" stroke-width="1"/>
+  <!-- Titlebar -->
+  <rect x="1" y="3" width="22" height="5" rx="3" ry="3" fill="#333"/>
+  <rect x="1" y="5.5" width="22" height="2.5" fill="#333"/>
+  <!-- Traffic lights -->
+  <circle cx="5" cy="5.5" r="1.2" fill="#ef5350"/>
+  <circle cx="8.5" cy="5.5" r="1.2" fill="#ffb300"/>
+  <circle cx="12" cy="5.5" r="1.2" fill="#66bb6a"/>
+  <!-- Prompt > -->
+  <polyline points="4,12 8,15 4,18" fill="none" stroke="#4caf50"
+    stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Cursor line -->
+  <line x1="10" y1="15" x2="17" y2="15" stroke="#4caf50" stroke-width="1.8"
+    stroke-linecap="round"/>
+  <line x1="10" y1="18" x2="14" y2="18" stroke="#4caf50" stroke-width="1.5"
+    stroke-linecap="round" stroke-dasharray="2,2"/>
+
+</svg>

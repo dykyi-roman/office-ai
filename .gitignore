@@ -1,0 +1,37 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Tauri
+src-tauri/node_modules/
+
+# Test & coverage
+coverage/
+
+#AI
+.ai
+.claude
+CLAUDE.md

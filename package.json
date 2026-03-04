@@ -1,0 +1,41 @@
+{
+  "name": "office-ai",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "generate:sprites": "npx tsx scripts/generate-sprites.ts",
+    "generate:tiles": "npx tsx scripts/generate-tiles.ts",
+    "generate:effects": "npx tsx scripts/generate-effects.ts",
+    "generate:all": "npm run generate:sprites && npm run generate:tiles && npm run generate:effects"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/cli": "^2.10.0",
+    "@tauri-apps/plugin-shell": "^2.3.5",
+    "pixi.js": "^8.16.0",
+    "svelte": "^5.53.5"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^0.1.95",
+    "@playwright/test": "^1.58.2",
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@tsconfig/svelte": "^5.0.8",
+    "svelte-check": "^4.4.4",
+    "tslib": "^2.8.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18"
+  }
+}

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" width="200" height="120">
+
+  <!-- Shadow -->
+  <path d="
+    M20 6
+    L180 6 Q194 6 194 20
+    L194 84 Q194 98 180 98
+    L50 98 L30 114 L36 98
+    L20 98 Q6 98 6 84
+    L6 20 Q6 6 20 6 Z
+  " fill="rgba(0,0,0,0.15)" transform="translate(2,2)"/>
+  <!-- Main bubble body -->
+  <path d="
+    M20 4
+    L180 4 Q196 4 196 20
+    L196 82 Q196 98 180 98
+    L50 98 L28 116 L34 98
+    L20 98 Q4 98 4 82
+    L4 20 Q4 4 20 4 Z
+  " fill="#ffffff" stroke="#d0d0d0" stroke-width="1.5"/>
+  <!-- 9-slice guide markers (invisible but semantic) -->
+  <!-- Corner radius: 16px — slice at x=16, x=184, y=16, y=82 -->
+
+</svg>

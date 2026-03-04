@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+
+  <path d="M8 1 L15 4 L15 9 Q15 14 8 16 Q1 14 1 9 L1 4 Z" fill="#f9a825" stroke="#e65100" stroke-width="1"
+    stroke-linejoin="round"/>
+  <path d="M8 1 L15 4 L15 9 Q15 14 8 16 Q1 14 1 9 L1 4 Z" fill="url(#goldGrad)" stroke="none"/>
+  <defs>
+    <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffee58"/>
+      <stop offset="100%" stop-color="#f57f17"/>
+    </linearGradient>
+  </defs>
+  <!-- Star -->
+  <polygon points="8,4 9,7 12,7 9.5,9 10.5,12 8,10 5.5,12 6.5,9 4,7 7,7"
+    fill="#fff" opacity="0.9"/>
+
+</svg>

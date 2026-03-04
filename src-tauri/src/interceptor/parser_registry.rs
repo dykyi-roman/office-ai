@@ -1,0 +1,266 @@
+// Parser registry — routes log lines to the correct agent parser.
+//
+// Routing priority:
+// 1. Explicit directory binding (longest prefix match)
+// 2. Auto-detection fallback via can_parse()
+// 3. None if no parser claims the line
+
+use super::parsed_event::ParsedEvent;
+use super::parser_trait::AgentLogParser;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// A directory-to-parser binding.
+#[derive(Clone)]
+struct DirectoryBinding {
+    path: PathBuf,
+    parser_index: usize,
+}
+
+/// Routes log lines to the correct parser based on file path or content.
+pub struct ParserRegistry {
+    parsers: Vec<Arc<dyn AgentLogParser>>,
+    bindings: Vec<DirectoryBinding>,
+}
+
+impl ParserRegistry {
+    pub fn new() -> Self {
+        Self {
+            parsers: Vec::new(),
+            bindings: Vec::new(),
+        }
+    }
+
+    /// Register a parser. Returns its index for use with `bind_directory`.
+    pub fn register_parser(&mut self, parser: Arc<dyn AgentLogParser>) -> usize {
+        let index = self.parsers.len();
+        app_log!(
+            "PARSER_REG",
+            "registered parser '{}' at index {}",
+            parser.name(),
+            index
+        );
+        self.parsers.push(parser);
+        index
+    }
+
+    /// Bind a directory prefix to a specific parser.
+    /// Log files under this directory will be routed to the bound parser.
+    pub fn bind_directory(&mut self, path: PathBuf, parser_index: usize) {
+        app_log!(
+            "PARSER_REG",
+            "bound {:?} → parser index {}",
+            path,
+            parser_index
+        );
+        self.bindings.push(DirectoryBinding { path, parser_index });
+    }
+
+    /// Parse a log line, routing to the correct parser.
+    ///
+    /// 1. Check explicit directory bindings (longest prefix match)
+    /// 2. Fall back to auto-detection via `can_parse()`
+    /// 3. Return `None` if no parser claims the line
+    pub fn parse_line(&self, path: &Path, line: &str) -> Option<ParsedEvent> {
+        // 1. Explicit binding — longest prefix match
+        if let Some(parser) = self.find_by_binding(path) {
+            return parser.parse_line(line);
+        }
+
+        // 2. Auto-detection fallback
+        for parser in &self.parsers {
+            if parser.can_parse(path, line) {
+                return parser.parse_line(line);
+            }
+        }
+
+        // 3. No parser matched
+        None
+    }
+
+    /// Find parser by directory binding using longest prefix match.
+    /// Uses `Path::starts_with()` for platform-agnostic component-level comparison.
+    fn find_by_binding(&self, path: &Path) -> Option<&Arc<dyn AgentLogParser>> {
+        self.bindings
+            .iter()
+            .filter(|b| path.starts_with(&b.path))
+            .max_by_key(|b| b.path.as_os_str().len())
+            .and_then(|b| self.parsers.get(b.parser_index))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Status;
+
+    /// A simple test parser that always returns Thinking status.
+    struct TestParser {
+        parser_name: String,
+        detects_prefix: String,
+    }
+
+    impl AgentLogParser for TestParser {
+        fn name(&self) -> &str {
+            &self.parser_name
+        }
+
+        fn can_parse(&self, path: &Path, _first_line: &str) -> bool {
+            path.to_string_lossy().contains(&self.detects_prefix)
+        }
+
+        fn parse_line(&self, line: &str) -> Option<ParsedEvent> {
+            if line.trim().is_empty() {
+                return None;
+            }
+            Some(ParsedEvent {
+                status: Status::Thinking,
+                model: Some(self.parser_name.clone()),
+                current_task: Some(line.to_string()),
+                tokens_in: None,
+                tokens_out: None,
+                sub_agents: vec![],
+                completed_sub_agent_ids: vec![],
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+                cwd: None,
+            })
+        }
+    }
+
+    fn make_test_parser(name: &str, prefix: &str) -> Arc<dyn AgentLogParser> {
+        Arc::new(TestParser {
+            parser_name: name.to_string(),
+            detects_prefix: prefix.to_string(),
+        })
+    }
+
+    /// A parser that only works via explicit binding — never auto-detects.
+    struct BindingOnlyParser {
+        parser_name: String,
+    }
+
+    impl AgentLogParser for BindingOnlyParser {
+        fn name(&self) -> &str {
+            &self.parser_name
+        }
+
+        fn can_parse(&self, _path: &Path, _first_line: &str) -> bool {
+            false
+        }
+
+        fn parse_line(&self, line: &str) -> Option<ParsedEvent> {
+            if line.trim().is_empty() {
+                return None;
+            }
+            Some(ParsedEvent {
+                status: Status::Thinking,
+                model: Some(self.parser_name.clone()),
+                current_task: Some(line.to_string()),
+                tokens_in: None,
+                tokens_out: None,
+                sub_agents: vec![],
+                completed_sub_agent_ids: vec![],
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+                cwd: None,
+            })
+        }
+    }
+
+    #[test]
+    fn test_explicit_binding_routes_correctly() {
+        let mut reg = ParserRegistry::new();
+        let idx = reg.register_parser(make_test_parser("claude", ".claude"));
+        reg.bind_directory(PathBuf::from("/home/user/.claude/projects"), idx);
+
+        let path = Path::new("/home/user/.claude/projects/myproj/session.jsonl");
+        let result = reg.parse_line(path, "some log line");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().model, Some("claude".to_string()));
+    }
+
+    #[test]
+    fn test_longest_prefix_wins() {
+        let mut reg = ParserRegistry::new();
+        let idx_generic = reg.register_parser(make_test_parser("generic", ""));
+        let idx_specific = reg.register_parser(make_test_parser("specific", ""));
+        reg.bind_directory(PathBuf::from("/home/user"), idx_generic);
+        reg.bind_directory(PathBuf::from("/home/user/.claude/projects"), idx_specific);
+
+        let path = Path::new("/home/user/.claude/projects/myproj/session.jsonl");
+        let result = reg.parse_line(path, "log line");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().model, Some("specific".to_string()));
+    }
+
+    #[test]
+    fn test_auto_detection_fallback() {
+        let mut reg = ParserRegistry::new();
+        reg.register_parser(make_test_parser("gemini", ".gemini"));
+
+        // No binding — should fall back to can_parse()
+        let path = Path::new("/home/user/.gemini/sessions/log.jsonl");
+        let result = reg.parse_line(path, "gemini log");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().model, Some("gemini".to_string()));
+    }
+
+    #[test]
+    fn test_no_parser_returns_none() {
+        let mut reg = ParserRegistry::new();
+        reg.register_parser(make_test_parser("claude", ".claude"));
+
+        let path = Path::new("/home/user/.unknown/log.jsonl");
+        let result = reg.parse_line(path, "unknown log");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_empty_registry_returns_none() {
+        let reg = ParserRegistry::new();
+        let path = Path::new("/some/path/log.jsonl");
+        assert!(reg.parse_line(path, "anything").is_none());
+    }
+
+    #[test]
+    fn test_binding_does_not_override_auto_detection_for_unbound_path() {
+        let mut reg = ParserRegistry::new();
+        let claude_idx = reg.register_parser(make_test_parser("claude", ".claude"));
+        reg.register_parser(make_test_parser("gemini", ".gemini"));
+        reg.bind_directory(PathBuf::from("/home/user/.claude"), claude_idx);
+
+        // Gemini path — not bound, but auto-detectable
+        let path = Path::new("/home/user/.gemini/sessions/log.jsonl");
+        let result = reg.parse_line(path, "gemini log");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().model, Some("gemini".to_string()));
+    }
+
+    #[test]
+    fn test_binding_with_path_starts_with_component_boundary() {
+        let mut reg = ParserRegistry::new();
+        // Use BindingOnlyParser to isolate binding logic from auto-detection
+        let parser: Arc<dyn AgentLogParser> = Arc::new(BindingOnlyParser {
+            parser_name: "bound-parser".to_string(),
+        });
+        let idx = reg.register_parser(parser);
+        reg.bind_directory(PathBuf::from("/home/user/.claude"), idx);
+
+        // Full sub-path — should match via binding
+        let path = Path::new("/home/user/.claude/projects/myproj/session.jsonl");
+        assert!(reg.parse_line(path, "log line").is_some());
+
+        // Partial directory name — should NOT match (Path::starts_with is component-based)
+        let partial = Path::new("/home/user/.claude-backup/log.jsonl");
+        assert!(reg.parse_line(partial, "log line").is_none());
+    }
+
+    #[test]
+    fn test_empty_line_returns_none_from_parser() {
+        let mut reg = ParserRegistry::new();
+        let idx = reg.register_parser(make_test_parser("claude", ".claude"));
+        reg.bind_directory(PathBuf::from("/home/user/.claude"), idx);
+
+        let path = Path::new("/home/user/.claude/projects/p/s.jsonl");
+        assert!(reg.parse_line(path, "").is_none());
+    }
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/static/capabilities-schema-v2.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "core:window:allow-set-badge-count",
+    "dialog:default"
+  ]
+}
