@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/tauri-v2-orange?style=for-the-badge" alt="Tauri" />
   <img src="https://img.shields.io/badge/svelte-5-red?style=for-the-badge" alt="Svelte" />
   <img src="https://img.shields.io/badge/pixi.js-v8-purple?style=for-the-badge" alt="PixiJS" />
-  <img src="https://img.shields.io/badge/tests-~592-green?style=for-the-badge" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-~672-green?style=for-the-badge" alt="Tests" />
 </p>
 
 <h1 align="center">OfficeAI</h1>
@@ -26,6 +26,7 @@
 ## Contents
 
 - [Quick Start](#quick-start)
+- [Basic Usage](#basic-usage)
 - [Concept](#concept)
 - [App Tour](#app-tour)
 - [How It Works](#how-it-works)
@@ -33,7 +34,9 @@
 - [Agent Lifecycle](#agent-lifecycle)
 - [Idle Zones](#idle-zones)
 - [Agent Discovery](#agent-discovery)
+- [Troubleshooting](#troubleshooting)
 - [Non-Goals](#non-goals)
+- [Roadmap](#roadmap)
 - [Commands](#commands)
 - [Tech Stack](#tech-stack)
 - [Cross-Platform Support](#cross-platform-support)
@@ -57,6 +60,15 @@ make dev
 ```
 
 The app opens in a native 1280x800 window. The Rust backend automatically starts scanning processes and logs.
+
+---
+
+## Basic Usage
+
+1. **Launch OfficeAI:** Start the app using `make dev` or open the installed binary.
+2. **Run your AI Agent:** Open a **separate terminal** and start your preferred agent (e.g., `claude` or `gemini-cli`).
+3. **Watch the Office:** OfficeAI will automatically detect the new process. An employee character will appear, walk to their assigned desk, and begin reflecting the agent's real-time state (thinking, typing, or using tools).
+4. **Interact:** Hover over agents to see their latest response or click the status bar to see a full list of active employees.
 
 ---
 
@@ -84,7 +96,7 @@ A quick walkthrough of what you see when you use OfficeAI.
 
 <p align="center"><img src="images/agent_is_working.png" width="350" alt="Working agent with bouncing balls"></p>
 
-**Bouncing balls mean the agent is busy.** Colored balls appear above an agent's head when it is actively thinking, responding, or using tools. The ball color reflects the model tier — gold for flagship models, blue for senior, and so on.
+**Bouncing balls mean the agent is busy.** Colored balls appear above an agent's head when it is actively thinking, responding, or using tools. The ball color reflects the model tier — gold for expert models, blue for senior, and so on.
 
 <p align="center"><img src="images/agent_is_idle.png" width="350" alt="Idle agent roaming the office"></p>
 
@@ -93,6 +105,10 @@ A quick walkthrough of what you see when you use OfficeAI.
 <p align="center"><img src="images/tool_tip_message.png" width="350" alt="Speech bubble with agent response"></p>
 
 **Speech bubbles show what agents are saying.** Hover over a working agent to see a preview of its response right inside the office, without switching to your terminal or browser.
+
+<p align="center"><img src="images/cancelled_request.png" width="400" alt="Cancelled request visualization"></p>
+
+**Cancellations are detected in real-time.** If you interrupt an agent's task in your terminal (Ctrl+C), OfficeAI detects this state change instantly. The agent stops its current activity and returns to its idle routine.
 
 <p align="center"><img src="images/agents_popup_window.png" width="400" alt="Agents panel listing all agents"></p>
 
@@ -158,12 +174,12 @@ When the backend receives a model name from agent logs (e.g. `"claude-opus-4-6"`
 
 | Tier         | Keywords in model name                                         | Examples                                  |
 |--------------|----------------------------------------------------------------|-------------------------------------------|
-| **Flagship** | `opus`, `ultra`, `gpt-4o` (no `-mini`), `o1-*`, `o3-*` (no `-mini`) | Claude Opus 4, GPT-4o, Gemini Ultra, o3   |
+| **Expert**   | `opus`, `ultra`, `gpt-4o` (no `-mini`), `o1-*`, `o3-*` (no `-mini`) | Claude Opus 4, GPT-4o, Gemini Ultra, o3   |
 | **Senior**   | `sonnet`, `pro`, `gpt-4` (not `gpt-4o`)                       | Claude Sonnet 4, GPT-4-turbo, Gemini Pro  |
 | **Middle**   | Everything else (fallback)                                     | Any unknown model                         |
 | **Junior**   | `haiku`, `nano`, `flash`, `gpt-3.5`, `-mini`                  | Claude Haiku 4, GPT-4o-mini, Gemini Flash |
 
-> **Check order matters:** Junior is checked first (so `-mini` catches `o1-mini`, `o3-mini` before Flagship). Then Flagship, Senior. Everything else — Middle.
+> **Check order matters:** Junior is checked first (so `-mini` catches `o1-mini`, `o3-mini` before Expert). Then Expert, Senior. Everything else — Middle.
 
 ### Work Indicator
 
@@ -171,7 +187,7 @@ When an agent is working (thinking, responding, tool_use), **three animated boun
 
 | Tier         | Color                      |
 |--------------|----------------------------|
-| **Flagship** | 🟡 Gold `#FFD700`       |
+| **Expert**   | 🟡 Gold `#FFD700`       |
 | **Senior**   | 🔵 Blue `#4A90E2`       |
 | **Middle**   | 🟢 Green `#5CB85C`      |
 | **Junior**   | ⚪ Gray `#AAAAAA`       |
@@ -249,6 +265,15 @@ The system uses different detection strategies depending on the agent type:
 | Agent Type              | Status        | Detection Method                                                                               | State Extraction                                                                      |
 |-------------------------|---------------|------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
 | **Claude Code (CLI)**   | Implemented   | Process scanning via `sysinfo` crate. Monitoring `~/.claude/projects/` directory               | Log file parsing: `user_prompt`, `assistant_start`, `tool_use`, `assistant_end`       |
+| **Gemini CLI**          | Implemented   | Process scanning (`gemini`, `node.*gemini`). Monitoring `~/.gemini/tmp/` directory              | JSON-array session parsing: `user`, `gemini`, `info` messages                          |
+
+---
+
+## Troubleshooting
+
+- **Agent not appearing?** Verify the log root in **Settings > Discovery**. For example, Claude Code logs are usually in `~/.claude/projects/`.
+- **Process not detected?** Some agents run via `node` or `python`. Ensure your `agent_process_patterns` in settings include the correct regex for your environment.
+- **Diagnostic Log:** If you run into issues, go to **Settings > General** and click **Bug Report**. This generates a `diagnostic.json` file for debugging.
 
 ---
 
@@ -258,6 +283,16 @@ The system uses different detection strategies depending on the agent type:
 - No network requests to external servers — all processing is local.
 - This is **not a CLI replacement** — the visualizer is a companion/monitor tool only.
 - Prompt data is **never stored or transmitted** — only metadata is used (state, model name, token counts).
+
+---
+
+## Roadmap
+
+- [ ] **ChatGPT CLI Support** — integration with official and community-built CLIs.
+- [ ] **Browser Model Tracking** — visual indicators for ChatGPT/Claude web sessions (via browser extension).
+- [ ] **Office Customization** — changeable floor plans, custom furniture, and skins.
+- [ ] **Collaboration Mode** — visual links/indicators when multiple agents are delegating tasks to each other.
+- [ ] **New Idle Zones** — gym area, library, and outdoor garden for more character variety.
 
 ---
 
@@ -296,8 +331,8 @@ The system uses different detection strategies depending on the agent type:
 | **Async runtime**      | Tokio                                    |
 | **IPC**                | Tauri events + commands                  |
 | **Config storage**     | TOML (`~/.config/office-ai/config.toml`) |
-| **TS testing**         | Vitest (~406 tests)                      |
-| **Rust testing**       | cargo test (~179 tests)                  |
+| **TS testing**         | Vitest (~411 tests)                      |
+| **Rust testing**       | cargo test (~261 tests)                  |
 
 ---
 
@@ -325,5 +360,6 @@ The app icon badge shows the number of currently active agents (not idle, not of
 | [BACKEND.md](docs/BACKEND.md)             | Rust backend — process scanner, log parser, IPC           |
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | All settings explained (defaults, behavior)               |
 | [TESTING.md](docs/TESTING.md)             | Test structure, commands, coverage, CI/CD                 |
+| [CHANGELOG.md](CHANGELOG.md)               | Project history, version changes, and release notes       |
 | [CONTRIBUTING.md](CONTRIBUTING.md)        | How to contribute, code style, commit conventions         |
 | [LICENSE](LICENSE)                        | MIT License                                               |

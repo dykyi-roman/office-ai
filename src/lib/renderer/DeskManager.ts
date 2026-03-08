@@ -1,5 +1,5 @@
 // Desk assignment manager
-// Flagship/Senior agents receive priority (lead) desks; Middle/Junior receive standard desks
+// Expert/Senior agents receive priority (lead) desks; Middle/Junior receive standard desks
 
 import type { GridPosition, DeskAssignment } from "$lib/types/office";
 import type { Tier } from "$lib/types/agent";
@@ -13,7 +13,7 @@ interface DeskRecord {
 
 /**
  * Manages desk assignments for agents.
- * Priority desks are reserved for flagship and senior agents.
+ * Priority desks are reserved for expert and senior agents.
  * Standard desks are used by middle and junior agents.
  * All non-assigned priority desks can overflow to senior when standard desks run out.
  */
@@ -51,7 +51,7 @@ export class DeskManager {
 
   /**
    * Assign the nearest free desk appropriate for the given tier.
-   * Flagship and senior agents get priority desks first; if none remain they
+   * Expert and senior agents get priority desks first; if none remain they
    * fall back to standard desks. Middle and junior always use standard desks.
    *
    * @param agentId - Unique agent identifier
@@ -65,7 +65,7 @@ export class DeskManager {
       return { ...existing.position };
     }
 
-    const wantsPriority = tier === "flagship" || tier === "senior";
+    const wantsPriority = tier === "expert" || tier === "senior";
 
     // First pass: preferred tier
     const primaryIdx = this.findFreeDesk(wantsPriority ? "priority" : "standard");

@@ -1262,7 +1262,7 @@
   "meta": {
     "app": "office-ai-sprite-generator",
     "version": "1.0.0",
-    "image": "teamlead.png",
+    "image": "expert.png",
     "format": "RGBA8888",
     "size": {
       "w": 1024,

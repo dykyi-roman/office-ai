@@ -9,10 +9,11 @@
 
 use super::parsed_event::ParsedEvent;
 use super::parser_trait::AgentLogParser;
+use crate::discovery::log_reader::{JsonlReader, LogFileReader};
 use crate::models::{Status, SubAgentInfo};
 use serde::Deserialize;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Claude Code JSONL log parser implementing the AgentLogParser trait.
 /// Delegates to the existing `parse_line()` function.
@@ -21,6 +22,10 @@ pub struct ClaudeCodeParser;
 impl AgentLogParser for ClaudeCodeParser {
     fn name(&self) -> &str {
         "claude-code"
+    }
+
+    fn model_hint(&self) -> &str {
+        "claude"
     }
 
     fn can_parse(&self, path: &Path, first_line: &str) -> bool {
@@ -49,6 +54,42 @@ impl AgentLogParser for ClaudeCodeParser {
 
     fn parse_line(&self, line: &str) -> Option<ParsedEvent> {
         parse_line(line)
+    }
+
+    /// Claude: `~/.claude/projects/<project-dir>/<session-uuid>.jsonl`
+    /// → `log-<project-dir>--<first 8 chars of uuid>`
+    fn path_to_agent_id(&self, path: &Path) -> String {
+        let parent = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let stem = path
+            .file_stem()
+            .map(|s| {
+                let s = s.to_string_lossy();
+                if s.len() > 8 {
+                    s[..8].to_string()
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_default();
+        if stem.is_empty() {
+            format!("log-{parent}")
+        } else {
+            format!("log-{parent}--{stem}")
+        }
+    }
+
+    fn log_roots(&self) -> Vec<PathBuf> {
+        dirs::home_dir()
+            .map(|h| vec![h.join(".claude").join("projects")])
+            .unwrap_or_default()
+    }
+
+    fn create_reader(&self) -> Box<dyn LogFileReader> {
+        Box::new(JsonlReader::new())
     }
 }
 
@@ -87,6 +128,27 @@ struct UsageField {
     output_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
     cache_creation_input_tokens: Option<u64>,
+}
+
+/// Check if a "user" message is a request interruption.
+/// Claude Code emits these when the user presses ESC:
+///   - "[Request interrupted by user]"
+///   - "[Request interrupted by user for tool use]"
+fn is_interrupt_message(entry: &LogEntry) -> bool {
+    let content = match entry.message.as_ref().and_then(|m| m.content.as_ref()) {
+        Some(c) => c,
+        None => return false,
+    };
+    match content {
+        Value::String(s) => s.trim().starts_with("[Request interrupted by user"),
+        Value::Array(blocks) => blocks.iter().any(|block| {
+            block
+                .get("text")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| t.trim().starts_with("[Request interrupted by user"))
+        }),
+        _ => false,
+    }
 }
 
 /// Check if a "user" message is actually a real user prompt.
@@ -352,7 +414,9 @@ pub fn parse_line(line: &str) -> Option<ParsedEvent> {
     let (status, completed_sub_agent_ids) = match event_type {
         // Real Claude Code JSONL types
         "user" => {
-            if is_real_user_message(&entry) {
+            if is_interrupt_message(&entry) {
+                (Status::Error, vec![])
+            } else if is_real_user_message(&entry) {
                 (Status::Thinking, vec![])
             } else {
                 // Extract completed sub-agent IDs from tool_result blocks
@@ -801,6 +865,49 @@ mod tests {
         )
         .unwrap();
         assert!(extract_content_text(&content).is_none());
+    }
+
+    #[test]
+    fn test_parse_interrupt_by_user() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"timestamp":"2026-01-01T00:00:00Z"}"#;
+        let event = parse_line(line).unwrap();
+        assert_eq!(event.status, Status::Error);
+    }
+
+    #[test]
+    fn test_parse_interrupt_by_user_for_tool_use() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]},"timestamp":"2026-01-01T00:00:00Z"}"#;
+        let event = parse_line(line).unwrap();
+        assert_eq!(event.status, Status::Error);
+    }
+
+    #[test]
+    fn test_parse_interrupt_string_content() {
+        let line = r#"{"type":"user","message":{"role":"user","content":"[Request interrupted by user]"},"timestamp":"2026-01-01T00:00:00Z"}"#;
+        let event = parse_line(line).unwrap();
+        assert_eq!(event.status, Status::Error);
+    }
+
+    #[test]
+    fn test_path_to_agent_id_from_project_path() {
+        let parser = ClaudeCodeParser;
+        let path = Path::new(
+            "/home/user/.claude/projects/-Users-me-myproject/8fea29d9-1234-5678-abcd-ef0123456789.jsonl",
+        );
+        assert_eq!(
+            parser.path_to_agent_id(path),
+            "log--Users-me-myproject--8fea29d9"
+        );
+    }
+
+    #[test]
+    fn test_path_to_agent_id_short_filename() {
+        let parser = ClaudeCodeParser;
+        let path = Path::new("/home/user/.claude/projects/-Users-me-myproject/abc.jsonl");
+        assert_eq!(
+            parser.path_to_agent_id(path),
+            "log--Users-me-myproject--abc"
+        );
     }
 
     #[test]

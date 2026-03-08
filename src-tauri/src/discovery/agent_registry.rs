@@ -133,11 +133,11 @@ impl AgentRegistry {
         self.agents.insert(agent.id.clone(), agent);
     }
 
-    /// Count agents that are actively working (not Idle or Offline).
+    /// Count agents that are actively working (not Idle, Offline, or Error).
     pub fn active_count(&self) -> u32 {
         self.agents
             .values()
-            .filter(|a| !matches!(a.status, Status::Idle | Status::Offline))
+            .filter(|a| !matches!(a.status, Status::Idle | Status::Offline | Status::Error))
             .count() as u32
     }
 
@@ -236,6 +236,46 @@ mod tests {
 
         registry.agents.insert(idle.id.clone(), idle);
         registry.agents.insert(thinking.id.clone(), thinking);
+
+        assert_eq!(registry.active_count(), 1);
+    }
+
+    #[test]
+    fn test_active_count_excludes_error() {
+        let mut registry = AgentRegistry::new();
+
+        let mut error_agent = make_agent("error", 3);
+        error_agent.status = Status::Error;
+
+        let mut thinking = make_agent("thinking", 4);
+        thinking.status = Status::Thinking;
+
+        registry.agents.insert(error_agent.id.clone(), error_agent);
+        registry.agents.insert(thinking.id.clone(), thinking);
+
+        assert_eq!(registry.active_count(), 1);
+    }
+
+    #[test]
+    fn test_active_count_excludes_idle_offline_error() {
+        let mut registry = AgentRegistry::new();
+
+        let mut idle = make_agent("idle", 1);
+        idle.status = Status::Idle;
+
+        let mut offline = make_agent("offline", 2);
+        offline.status = Status::Offline;
+
+        let mut error = make_agent("error", 3);
+        error.status = Status::Error;
+
+        let mut tool_use = make_agent("tooluse", 4);
+        tool_use.status = Status::ToolUse;
+
+        registry.agents.insert(idle.id.clone(), idle);
+        registry.agents.insert(offline.id.clone(), offline);
+        registry.agents.insert(error.id.clone(), error);
+        registry.agents.insert(tool_use.id.clone(), tool_use);
 
         assert_eq!(registry.active_count(), 1);
     }

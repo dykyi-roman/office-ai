@@ -83,30 +83,40 @@ Platform-specific icon files for the OfficeAI desktop application. Referenced in
 
 Discovers running AI agent processes via OS introspection and monitors JSONL log files for activity. Manages the central agent registry that stores all known agents.
 
-**`process_scanner.rs`** — Scans OS processes every 2 seconds using the `sysinfo` crate. Detects Claude Code and other AI agents by matching process names/cmdlines against configurable regex patterns.
+**`process_scanner.rs`** — Scans OS processes every 2 seconds. Uses `ps axo pid,ppid,tty,args` as the primary process source (reliable on macOS, even from GUI/Tauri apps). `sysinfo` is used only for supplementary metadata (cwd, start_time). Detects Claude Code and Gemini CLI by matching process names/cmdlines against configurable regex patterns.
 
 Key components:
 - `ScannerEvent` — enum: `AgentFound(AgentState, Option<String>)` | `AgentLost(String)`
-- `DetectedProcess` — intermediate struct before conversion to `AgentState`
+- `DetectedProcess` — intermediate struct with `pid`, `name`, `cmdline`, `start_time`, `cwd`
+- `PsEntry` — raw process entry from `ps` with pid, ppid, tty, args
+- `get_ps_entries()` — enumerates all processes via `ps` (Unix) or returns empty (Windows)
 - `run_scanner()` — async loop: scans processes, emits events via `tokio::mpsc`
-- `scan_processes_with_patterns()` — one-shot scan using configurable patterns
+- `scan_processes_with_patterns()` — ps-driven scan with configurable patterns
 - `matches_agent_pattern()` — regex-based process matching
+- `derive_agent_name()` — extracts script name from Node.js cmdlines (e.g. `node .../gemini` → `gemini`)
+- `infer_initial_model()` — determines agent model from name + cmdline via `MODEL_KEYWORDS` lookup table (returns "unknown" for unrecognized processes)
 - `process_to_agent_state()` — converts `DetectedProcess` → `AgentState`
 
 Filtering layers:
 1. Regex pattern matching against process name and cmdline
 2. Blocklist (`ssh`, `git`, `curl`, etc.) — ignores non-agent executables
 3. Version number detection — filters out Claude Code's semver-named worker processes
-4. TTY check (`ps -o tty=`) — filters out background daemons (Unix only)
+4. TTY check (from ps tty field) — filters out background daemons (Unix only)
+5. Parent-child dedup — removes child processes whose parent is also detected (e.g. Gemini CLI spawns a child node process with same args)
 
-**`log_watcher.rs`** — Polls `~/.claude/projects/*/*.jsonl` files every 500ms for new log lines. Tracks file read positions to avoid re-reading old content. Handles file rotation (shrunk files).
+**`log_watcher.rs`** — Format-agnostic polling loop that checks log directories every 500ms for new content. Delegates file reading to `LogFileReader` implementations (one per format). Handles file rotation detection.
 
 Key components:
 - `RawLogLine` — struct: `{ path: PathBuf, line: String }`
-- `run_log_watcher()` — async polling loop, sends lines via `tokio::mpsc`
-- `read_new_lines()` — reads incremental content since last position
-- `resolve_log_dirs()` — expands root directories into project subdirectories
-- `seed_positions()` — skips existing content on startup
+- `run_log_watcher(readers, watch_dirs, custom_paths, tx)` — async polling loop, accepts pre-built readers and pre-resolved directories
+- `collect_files()` — collects all files from watched directories (readers filter by `can_handle()`)
+
+**`log_reader.rs`** — `LogFileReader` trait + format-specific implementations. Each reader encapsulates position tracking and incremental reading for a specific file format.
+
+Key components:
+- `LogFileReader` trait: `can_handle()`, `read_new()`, `seed()`
+- `JsonlReader` — reads JSONL files line-by-line, tracks byte positions (used by Claude Code)
+- `JsonArrayReader` — reads JSON-array session files, tracks message counts (used by Gemini CLI)
 
 **`agent_registry.rs`** — In-memory `HashMap<String, AgentState>` protected by `Arc<RwLock<...>>`. Every mutation emits Tauri events to the frontend and updates the dock/taskbar badge.
 
@@ -116,7 +126,7 @@ Key components:
 - `register()` → emits `agent:found`
 - `update()` → emits `agent:state-changed`
 - `remove()` → emits `agent:lost`
-- `active_count()` — counts non-Idle, non-Offline agents (used for badge)
+- `active_count()` — counts non-Idle, non-Offline, non-Error agents (used for badge)
 - `total_tokens_in()` / `total_tokens_out()` — aggregate token stats
 
 **Data flow:**
@@ -130,23 +140,31 @@ OS Processes → process_scanner → ScannerEvent → scanner_consumer (lib.rs)
 ~/.claude/*.jsonl → log_watcher → RawLogLine → log_consumer (lib.rs)
 ```
 
-**Agent-process correlation:** The scanner registers agents as `pid-{PID}` with their cwd. The log watcher derives IDs as `log-{project-dir}--{session-uuid-prefix}`. The `resolve_agent_id()` function in `lib.rs` bridges the gap using cwd-based matching and a stale mapping cache (30s expiry).
+**Agent-process correlation:** The scanner registers agents as `pid-{PID}` with their cwd. The log watcher derives IDs as `log-{project-dir}--{session-uuid-prefix}`. The `resolve_agent_id()` function in `lib.rs` bridges the gap using:
+- CWD-based matching (when log provides CWD, e.g. Claude Code JSONL)
+- Model-hint fallback (when CWD is unavailable, e.g. Gemini CLI — matches by model affinity alone)
+- Stale mapping cache with 30s expiry
+- Deterministic PID tiebreaker (lowest PID wins among equal candidates)
 
 ### Module: `interceptor/` — Log Parsing & State Classification
 
 Pluggable parser architecture for translating AI agent log formats into a common `ParsedEvent`, plus a finite state machine (FSM) that classifies and debounces agent state transitions.
 
-**`parser_trait.rs`** — Defines the `AgentLogParser` trait — the interface for pluggable parsers:
+**`parser_trait.rs`** — Defines the `AgentLogParser` trait — the self-contained interface for pluggable parsers. Each parser encapsulates all agent-specific knowledge: log format, ID derivation, directory discovery, and file reader creation.
 
 ```rust
 pub trait AgentLogParser: Send + Sync {
     fn name(&self) -> &str;
     fn can_parse(&self, path: &Path, first_line: &str) -> bool;
     fn parse_line(&self, line: &str) -> Option<ParsedEvent>;
+    fn path_to_agent_id(&self, path: &Path) -> String;     // ID from log file path
+    fn log_roots(&self) -> Vec<PathBuf>;                    // root directories to watch
+    fn resolve_log_dirs(&self, root: &Path) -> Vec<PathBuf>; // expand root → project dirs
+    fn create_reader(&self) -> Box<dyn LogFileReader>;       // format-specific file reader
 }
 ```
 
-**`parser_registry.rs`** — Routes log lines to the correct parser implementation.
+**`parser_registry.rs`** — Routes log lines and ID derivation to the correct parser implementation.
 
 Routing priority:
 1. Explicit directory binding (longest prefix match via `Path::starts_with()`)
@@ -158,6 +176,7 @@ Key components:
 - `register_parser()` → returns index for `bind_directory()`
 - `bind_directory()` → associates a path prefix with a parser
 - `parse_line(path, line)` → routes and parses
+- `path_to_agent_id(path)` → delegates ID derivation to the matched parser
 
 **`claude_code_parser.rs`** — Parses Claude Code JSONL session logs (`~/.claude/projects/<project>/<session>.jsonl`).
 
@@ -304,7 +323,7 @@ Agent types:
 
 | Type | Variants / Fields | Serde |
 |---|---|---|
-| `Tier` | `Flagship`, `Senior`, `Middle`, `Junior` | `snake_case` |
+| `Tier` | `Expert`, `Senior`, `Middle`, `Junior` | `snake_case` |
 | `Status` | `Idle`, `WalkingToDesk`, `Thinking`, `Responding`, `ToolUse`, `Collaboration`, `TaskComplete`, `Error`, `Offline` | `snake_case` |
 | `IdleLocation` | `WaterCooler`, `Kitchen`, `Sofa`, `MeetingRoom`, `StandingDesk`, `Desk`, `Bathroom`, `HrZone`, `Lounge` | `snake_case` |
 | `Source` | `Cli`, `BrowserExtension`, `SdkHook` | `snake_case` |
@@ -312,7 +331,7 @@ Agent types:
 | `AgentState` | 14 fields: id, pid, name, model, tier, role, status, idle_location, current_task, tokens_in/out, sub_agents, last_activity, source | `camelCase` |
 
 Tier inference — `Tier::from_model()` maps model names to tiers:
-- **Flagship:** opus, ultra, gpt-4o, o1-*, o3-* (not mini)
+- **Expert:** opus, ultra, gpt-4o, o1-*, o3-* (not mini)
 - **Senior:** sonnet, pro, gpt-4 (not gpt-4o)
 - **Junior:** haiku, nano, flash, gpt-3.5, *-mini
 - **Middle:** everything else
@@ -353,8 +372,11 @@ Event name constants (`event_names` module):
 | `state_debounce_ms` | `u64` | 300 |
 | `animation_speed` | `f64` | 1.0 |
 | `show_agent_metrics` | `bool` | true |
-| `agent_process_patterns` | `Vec<String>` | ["claude", "node.*claude"] |
-| `log_roots` | `Vec<PathBuf>` | [~/.claude/projects] |
+| `agent_process_patterns` | `Vec<String>` | ["claude", "node.*claude", "gemini", "node.*gemini"] |
+| `log_roots` | `Vec<PathBuf>` | [~/.claude/projects, ~/.gemini/tmp] |
+| `work_timeout_ms` | `u64` | 120000 |
+| `responding_timeout_ms` | `u64` | 30000 |
+| `debug_mode` | `bool` | false |
 
 **`bug_report.rs`** — Data structures for diagnostics export. Rust-only — not mirrored in TypeScript (written directly to file, not sent via IPC).
 
@@ -376,15 +398,17 @@ src-tauri/src/
 ├── logger.rs           — file logging with categories
 ├── discovery/
 │   ├── mod.rs
-│   ├── process_scanner.rs   — OS process detection via sysinfo
-│   ├── log_watcher.rs       — incremental JSONL log reading
+│   ├── process_scanner.rs   — OS process detection via ps + sysinfo
+│   ├── log_watcher.rs       — format-agnostic polling loop (delegates to LogFileReader)
+│   ├── log_reader.rs        — LogFileReader trait + JsonlReader + JsonArrayReader
 │   └── agent_registry.rs    — agent registry (shared state)
 ├── interceptor/
 │   ├── mod.rs
 │   ├── parsed_event.rs        — common ParsedEvent type for all parsers
-│   ├── parser_trait.rs        — AgentLogParser trait (pluggable parsers)
+│   ├── parser_trait.rs        — AgentLogParser trait (self-contained parser interface)
 │   ├── parser_registry.rs     — parser registry (routing by directory/auto-detect)
 │   ├── claude_code_parser.rs  — Claude Code JSONL parsing + ClaudeCodeParser struct
+│   ├── gemini_cli_parser.rs   — Gemini CLI JSON-array parsing + GeminiCliParser struct
 │   ├── generic_cli_parser.rs  — heuristic parser for other CLIs
 │   └── state_classifier.rs   — FSM state classifier
 ├── ipc/
@@ -407,7 +431,8 @@ Channel 2: log_tx/log_rx          (capacity: 512)  — RawLogLine
 Channel 3: idle_tx/idle_rx        (capacity: 64)   — (String, Status, Instant)
 
 TASK 1: Process Scanner
-├─ Scans OS via sysinfo every 2s
+├─ Enumerates processes via `ps` (Unix) or sysinfo fallback (Windows) every 2s
+├─ Enriches with sysinfo metadata (cwd, start_time) via cached System instance
 ├─ Filters: regex → blocklist → version check → TTY check
 └─ Sends → scanner_tx: AgentFound(AgentState) | AgentLost(id)
 
@@ -417,8 +442,9 @@ TASK 2: Scanner Consumer
 └─ AgentLost → registry.remove(id) → emit agent:lost + update_badge
 
 TASK 3: Log Watcher
-├─ Polls ~/.claude/projects/*/*.jsonl every 500ms
-├─ Tracks positions in HashMap<PathBuf, u64>
+├─ Polls pre-resolved dirs every 500ms using LogFileReader implementations
+├─ JsonlReader: tracks byte positions (JSONL files)
+├─ JsonArrayReader: tracks message counts (JSON-array session files)
 ├─ Detects file rotation (size < pos → reset)
 └─ Sends → log_tx: RawLogLine { path, line }
 
@@ -467,41 +493,45 @@ TASK 5: Auto-Idle Consumer
    ```
 
 **Model and tier detection:**
-- At scan time: `model = "claude"`, `tier = Middle` (temporary values)
+- At scan time: model inferred via `MODEL_KEYWORDS` table (claude, gemini, aider, cursor, copilot → corresponding model; unrecognized → "unknown"), `tier = Middle` (temporary value)
 - Real model arrives from JSONL logs via `message.model` field
-- Tier recalculation: `Tier::from_model()` — opus → Flagship, sonnet → Senior, haiku → Junior, default → Middle
+- Tier recalculation: `Tier::from_model()` — opus → Expert, sonnet → Senior, haiku → Junior, default (including "unknown") → Middle
 
 ### Log Watcher — Incremental Reading
 
+The log watcher is format-agnostic. Each parser creates its own `LogFileReader` (via `create_reader()`), and the watcher delegates to the first reader that `can_handle()` each file.
+
 ```
-positions: HashMap<PathBuf, u64>  — byte offset for each file
+readers: Vec<Box<dyn LogFileReader>>  — one per parser (JsonlReader, JsonArrayReader, etc.)
+watch_dirs: Vec<PathBuf>              — pre-resolved by parsers via resolve_log_dirs()
 
 Loop (every 500ms):
-  1. Collect list of *.jsonl files
+  1. Collect all files from watch_dirs
   2. For each file:
-     a. stored_pos = positions[path] (0 if new)
-     b. file_size = metadata.len()
-     c. If file_size < stored_pos → file rotated → reset to 0
-     d. If file_size == stored_pos → no new content → skip
-     e. seek(stored_pos), read lines to EOF
-     f. Update positions[path]
+     a. Find first reader where can_handle(path) == true
+     b. reader.read_new(path) → Vec<String>
+     c. Send each line as RawLogLine via channel
 ```
 
-**Seed on startup:** for existing files `positions[path] = file_size` (skip old content).
+**Seed on startup:** for each existing file, the matching reader's `seed()` is called to skip old content.
 
 ### Pluggable Parser Architecture
 
-The parser system is built on the `AgentLogParser` trait — each AI agent implements its own parser:
+The parser system is built on the `AgentLogParser` trait — each AI agent implements its own self-contained parser. Adding a new agent = creating one new parser file + registering it in `lib.rs`. Zero changes to `log_watcher.rs` or other existing files.
 
 ```rust
 pub trait AgentLogParser: Send + Sync {
     fn name(&self) -> &str;
     fn can_parse(&self, path: &Path, first_line: &str) -> bool;
     fn parse_line(&self, line: &str) -> Option<ParsedEvent>;
+    fn path_to_agent_id(&self, path: &Path) -> String;       // derive agent ID from log path
+    fn log_roots(&self) -> Vec<PathBuf>;                      // root directories to watch
+    fn resolve_log_dirs(&self, root: &Path) -> Vec<PathBuf>;  // expand root → project dirs
+    fn create_reader(&self) -> Box<dyn LogFileReader>;         // format-specific file reader
 }
 ```
 
-**ParserRegistry** routes logs to the correct parser:
+**ParserRegistry** routes logs and ID derivation to the correct parser:
 1. **Explicit binding** — directory-to-parser binding (longest prefix match)
 2. **Auto-detection** — fallback via `can_parse()` on each parser
 3. **None** — if no parser claims the line
@@ -523,10 +553,10 @@ pub struct ParsedEvent {
 ```
 
 **Adding a new agent parser:**
-1. Create `src-tauri/src/interceptor/<agent>_parser.rs` implementing `AgentLogParser`
+1. Create `src-tauri/src/interceptor/<agent>_parser.rs` implementing `AgentLogParser` (all 7 methods)
 2. Add `pub mod <agent>_parser` in `interceptor/mod.rs`
-3. Register parser in `lib.rs` setup block + bind directory
-4. Update config defaults: add path to `log_roots` and pattern to `agent_process_patterns`
+3. Add `Arc::new(<Agent>Parser)` to the `parsers` vec in `lib.rs` — the loop auto-registers, binds directories, and creates readers
+4. Update `agent_process_patterns` in config defaults if the agent has a detectable process
 
 #### Claude Code JSONL Parser
 
@@ -562,6 +592,57 @@ This prevents internal XML tags from appearing in agent speech bubbles.
 tokens_in = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
 tokens_out = output_tokens
 ```
+
+#### Gemini CLI JSON-Array Parser
+
+`GeminiCliParser` — implementation of `AgentLogParser` for Gemini CLI session files (`~/.gemini/tmp/<project>/chats/session-*.json`).
+
+**Log format:** JSON arrays (or objects with `"messages"` field), not JSONL. The entire file is re-read and diffed by message count on each poll cycle.
+
+**Message type → Status mapping:**
+
+| `type` field | Condition | Status |
+|---|---|---|
+| `"user"` | Has text content | `Thinking` |
+| `"user"` | Empty content | *skipped* |
+| `"gemini"` | Has `toolCalls` array | `ToolUse` |
+| `"gemini"` | No tool calls | `Responding` |
+| `"info"` | Text contains "cancelled" | `Error` |
+| `"info"` | Otherwise | *skipped* |
+
+**Content extraction:** Supports two formats — old (`parts[].text`) and new (`content` as string or `content[].text` array).
+
+**Sub-agents:** Always empty (`sub_agents: vec![]`). Gemini `toolCalls` are regular tool use, not sub-agents — unlike Claude Code's Task/Agent tools. This prevents phantom sub-agents from blocking auto-idle transitions.
+
+### Parser Capabilities Comparison
+
+Not all parsers extract the same data. This table documents current capabilities and known limitations per parser.
+
+| Capability | Claude Code | Gemini CLI | Impact |
+|---|---|---|---|
+| **Log format** | JSONL (line-by-line, byte position tracking) | JSON array (full re-read, message count tracking) | Gemini has higher I/O per poll cycle |
+| **Status: Thinking** | `type="user"` with real text | `type="user"` with text | Same |
+| **Status: Responding** | `type="assistant"` without tool_use | `type="gemini"` without toolCalls | Same |
+| **Status: ToolUse** | `type="assistant"` with tool_use / `type="progress"` | `type="gemini"` with toolCalls | Same |
+| **Status: TaskComplete** | `stop_reason="end_turn"` | **Not supported** | Gemini agents stay in Responding until auto-idle timeout (30s) |
+| **Status: Error** | `type="error"` | `type="info"` with "cancelled" | Gemini only detects user cancellation |
+| **Model extraction** | `message.model` (priority) or top-level `model` | Top-level `model` field | Same |
+| **Token counting** | `message.usage` (`input + cache_read + cache_creation`) | `tokens.input` / `tokens.output` (`cached` parsed but unused) | Claude includes cache tokens in sum; Gemini does not |
+| **Sub-agent detection** | `tool_use` blocks with `name="Task"` or `name="Agent"` | **Not supported** (`sub_agents` always empty) | Gemini tool calls are regular tool use, not sub-agents |
+| **Sub-agent completion** | `tool_result` blocks + `queue-operation` notifications | **Not supported** (`completed_sub_agent_ids` always empty) | Gemini sub-agents are never removed from the list (cleared only on status reset) |
+| **Async agent detection** | Filters "Async agent launched" results | **Not supported** | N/A for Gemini |
+| **CWD (working directory)** | Extracted from JSONL `cwd` field | **Always `None`** | Gemini relies on model-hint fallback for agent-process correlation (step 4 in `resolve_agent_id`) |
+| **Meta message filtering** | `isMeta: true` → skip | **No equivalent** | N/A |
+| **XML command filtering** | Strips `<command-name>`, `<local-command-*>` from text | **No equivalent** | N/A |
+| **ID format** | `log-{project}--{uuid_prefix_8}` | `log-{project}--{session_prefix_16}` | Different prefix lengths |
+
+**Consequences of Gemini limitations:**
+
+1. **No TaskComplete → 30s idle delay.** Gemini agents visually remain at their desk (Responding status) for up to 30s after finishing, until the `responding_timeout_ms` auto-idle timer fires. Claude agents transition to TaskComplete → Idle in ~3s.
+
+2. **Sub-agents never cleared by completion.** For Claude, completed sub-agent IDs arrive via `tool_result` and `queue-operation` events, removing finished sub-agents from the list. For Gemini, `completed_sub_agent_ids` is always empty, so sub-agents accumulate until the next status reset (Thinking, TaskComplete, Error, or Idle).
+
+3. **CWD unavailable → weaker agent-process correlation.** Claude logs include `cwd`, enabling precise matching with scanner-detected processes. Gemini logs have no CWD, so correlation falls back to model-hint matching (any unbound `pid-*` agent with a matching model name). With multiple Gemini instances, this can cause incorrect pairing.
 
 ### State Classifier FSM
 
@@ -668,16 +749,21 @@ Step 2: Cached mapping — log_id in cache?
   If mapped_id still in registry → update last_seen, return
   If mapped_id gone → remove stale entry from cache
 
-Step 3: CWD-based matching:
+Step 3: CWD-based matching (when log_cwd is available):
   a) Build already_mapped: mappings with last_seen < 30s (active sessions)
   b) Build ever_mapped: ALL mappings (including stale)
   c) Find pid-* agents with matching CWD, NOT in already_mapped
      CWD match: prefix match in both directions
      (JSONL cwd may be a subdirectory of process cwd and vice versa)
-  d) Sort: never-mapped agents (priority 0) > previously mapped (priority 1)
+  d) Sort: model affinity → never-mapped preference → deterministic PID tiebreaker
   e) First candidate → cache and return
 
-Step 4: Fallback — no matches → return log_id as-is
+Step 4: Model-hint fallback (when log_cwd is None, e.g. Gemini CLI):
+  a) If model_hint is available, find unmapped pid-* agents with matching model
+  b) Sort: never-mapped preference → PID tiebreaker
+  c) First candidate → cache and return
+
+Step 5: Fallback — no matches → return log_id as-is
 ```
 
 **Never-mapped preference:** new sessions get agents that have never been bound to logs, avoiding "sticky" mappings on restart.
@@ -751,7 +837,7 @@ Managed by Tauri's `manage()` — injected into all command handlers via `State<
 |--------------|--------------------------------------------|
 | `tauri` v2   | Desktop app framework, IPC, window manager |
 | `tokio`      | Async runtime (channels, timers, spawn)    |
-| `sysinfo`    | OS process introspection                   |
+| `sysinfo`    | Supplementary process metadata (cwd, start_time) + Windows fallback enumeration |
 | `serde`      | JSON/struct serialization                  |
 | `serde_json` | JSONL log parsing                          |
 | `toml`       | Config file persistence                    |
@@ -770,8 +856,11 @@ Persisted to `~/.config/office-ai/config.toml`. Key settings:
 | `idle_timeout_ms`        | 3000                 | Auto-idle after TaskComplete     |
 | `state_debounce_ms`      | 300                  | FSM debounce window              |
 | `max_agents`             | 20                   | Maximum tracked agents           |
-| `agent_process_patterns` | ["claude", "node.*claude"] | Process detection patterns |
-| `log_roots`              | [~/.claude/projects] | JSONL log directories            |
+| `agent_process_patterns` | ["claude", "node.*claude", "gemini", "node.*gemini"] | Process detection patterns |
+| `log_roots`              | [~/.claude/projects, ~/.gemini/tmp] | Log directories            |
+| `work_timeout_ms`        | 120000               | Safety timeout for Thinking/ToolUse |
+| `responding_timeout_ms`  | 30000                | Safety timeout for Responding    |
+| `debug_mode`             | false                | Verbose diagnostic logging       |
 
 ## Build Commands
 

@@ -14,12 +14,12 @@ function makeDesks(count: number): DeskAssignment[] {
 }
 
 describe("test_desk_assignment_priority", () => {
-  it("flagship agent receives one of the first (priority) desks", () => {
+  it("expert agent receives one of the first (priority) desks", () => {
     const manager = new DeskManager();
     const desks = makeDesks(6);
     manager.loadDesks(desks, 2); // first 2 are priority
 
-    const pos = manager.assignDesk("agent-flagship", "flagship");
+    const pos = manager.assignDesk("agent-expert", "expert");
 
     // Priority desks are at col 1 and col 2
     expect(pos.col).toBeLessThanOrEqual(2);
@@ -63,10 +63,10 @@ describe("test_desk_release", () => {
   });
 
   it("released desk becomes available for reassignment", () => {
-    manager.assignDesk("agent-a", "flagship");
+    manager.assignDesk("agent-a", "expert");
     manager.releaseDesk("agent-a");
 
-    const pos2 = manager.assignDesk("agent-b", "flagship");
+    const pos2 = manager.assignDesk("agent-b", "expert");
     // Should get one of the priority desks (col 1 or 2)
     expect(pos2.col).toBeLessThanOrEqual(2);
     expect(pos2.row).toBe(1);
@@ -120,7 +120,7 @@ describe("DeskManager — no desks available", () => {
     const manager = new DeskManager();
     manager.loadDesks(makeDesks(2), 1);
 
-    manager.assignDesk("a1", "flagship");
+    manager.assignDesk("a1", "expert");
     manager.assignDesk("a2", "junior");
 
     expect(() => manager.assignDesk("a3", "middle")).toThrow();

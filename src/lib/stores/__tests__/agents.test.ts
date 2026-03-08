@@ -218,14 +218,14 @@ describe("test_derived_total_tokens — sums tokens across all agents", () => {
 describe("agentsByTier derived store", () => {
   it("groups agents by tier correctly", () => {
     const agents = [
-      makeAgent({ id: "a1", tier: "flagship" }),
+      makeAgent({ id: "a1", tier: "expert" }),
       makeAgent({ id: "a2", tier: "senior" }),
       makeAgent({ id: "a3", tier: "senior" }),
       makeAgent({ id: "a4", tier: "middle" }),
     ];
 
     const grouped = computeAgentsByTier(agents);
-    expect(grouped.get("flagship")).toHaveLength(1);
+    expect(grouped.get("expert")).toHaveLength(1);
     expect(grouped.get("senior")).toHaveLength(2);
     expect(grouped.get("middle")).toHaveLength(1);
     expect(grouped.has("junior")).toBe(false);

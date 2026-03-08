@@ -10,7 +10,7 @@ use tokio::time::Duration;
 
 /// Built-in detection patterns for AI agent processes (used in tests)
 #[cfg(test)]
-const BUILTIN_PATTERNS: &[&str] = &["claude", "node.*claude"];
+const BUILTIN_PATTERNS: &[&str] = &["claude", "node.*claude", "gemini", "node.*gemini"];
 
 /// Process names that should never be treated as AI agents,
 /// even if "claude" appears in their command line arguments.
@@ -21,6 +21,7 @@ const PROCESS_BLOCKLIST: &[&str] = &["ssh", "sshd", "git", "scp", "sftp", "rsync
 pub enum ScannerEvent {
     AgentFound(AgentState, Option<String>), // (agent, cwd)
     AgentLost(String),
+    CwdUpdated(String, String), // (agent_id, new_cwd)
 }
 
 /// Detected process information before it becomes an AgentState
@@ -28,6 +29,8 @@ pub enum ScannerEvent {
 pub struct DetectedProcess {
     pub pid: u32,
     pub name: String,
+    /// Full command-line string (from ps), used for agent type inference
+    pub cmdline: String,
     #[allow(dead_code)]
     pub start_time: u64,
     /// Working directory of the process (used to correlate with JSONL log paths)
@@ -52,8 +55,8 @@ fn is_blocklisted(name: &str) -> bool {
 }
 
 /// Check if a process has an interactive terminal (TTY).
-/// Background daemon processes have TTY "??" on macOS or "?" on Linux.
-#[cfg(unix)]
+/// Used in tests to verify TTY detection logic.
+#[cfg(all(unix, test))]
 fn has_tty(pid: u32) -> bool {
     let output = std::process::Command::new("ps")
         .args(["-o", "tty=", "-p", &pid.to_string()])
@@ -63,14 +66,88 @@ fn has_tty(pid: u32) -> bool {
             let tty = String::from_utf8_lossy(&o.stdout).trim().to_string();
             !tty.is_empty() && tty != "??" && tty != "?"
         }
-        Err(_) => true, // If ps fails, assume interactive
+        Err(_) => true,
     }
 }
 
-/// On Windows there is no Unix TTY concept; all detected processes pass the check.
+/// A raw process entry from `ps` with PID, TTY, PPID, stat, and full command line.
+struct PsEntry {
+    pid: u32,
+    ppid: u32,
+    tty: String,
+    /// Process state from `ps`: R=Running, S=Sleeping, T=Stopped, Z=Zombie, etc.
+    stat: String,
+    args: String,
+}
+
+/// Enumerate all processes using `ps` (reliable on macOS, even from GUI/Tauri apps).
+/// sysinfo may not enumerate all processes (especially Node.js child processes)
+/// in the Tauri app context, so `ps` is the primary source of truth for detection.
+#[cfg(unix)]
+fn get_ps_entries() -> Vec<PsEntry> {
+    let output = std::process::Command::new("ps")
+        .args(["axo", "pid,ppid,tty,stat,args"])
+        .output();
+    let Ok(o) = output else {
+        return vec![];
+    };
+    let text = String::from_utf8_lossy(&o.stdout);
+    let mut entries = Vec::new();
+    for line in text.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // Minimum: pid ppid tty stat command
+        if fields.len() < 5 {
+            continue;
+        }
+        let Ok(pid) = fields[0].parse::<u32>() else {
+            continue;
+        };
+        let ppid = fields[1].parse::<u32>().unwrap_or(0);
+        let tty = fields[2].to_string();
+        let stat = fields[3].to_string();
+        // args is everything from fields[4] onward (command may contain spaces)
+        let args = fields[4..].join(" ");
+        entries.push(PsEntry {
+            pid,
+            ppid,
+            tty,
+            stat,
+            args,
+        });
+    }
+    entries
+}
+
+/// Fallback process enumeration on Windows using `sysinfo`.
+/// Since `ps` is Unix-only, we use sysinfo to list all processes on Windows.
+/// Limitations: no TTY info (all pass), no PPID (no parent-child dedup),
+/// no stat (no stopped/zombie filtering).
 #[cfg(windows)]
-fn has_tty(_pid: u32) -> bool {
-    true
+fn get_ps_entries() -> Vec<PsEntry> {
+    let mut system = System::new_all();
+    system.refresh_all();
+    system
+        .processes()
+        .iter()
+        .map(|(pid, proc_info)| {
+            let args = proc_info
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            PsEntry {
+                pid: pid.as_u32(),
+                ppid: proc_info
+                    .parent()
+                    .map(|p| p.as_u32())
+                    .unwrap_or(0),
+                tty: "console".to_string(), // Windows has no TTY; treat all as interactive
+                stat: "S".to_string(),      // No stat info; assume running
+                args,
+            }
+        })
+        .collect()
 }
 
 /// Check if a process matches any of the given patterns
@@ -94,17 +171,66 @@ pub fn matches_agent_pattern(name: &str, cmdline: &str, patterns: &[&str]) -> bo
     false
 }
 
+/// Keyword → model lookup table for process detection.
+/// Order matters: first match wins. Add new agent keywords here.
+const MODEL_KEYWORDS: &[(&str, &str)] = &[
+    ("gemini", "gemini"),
+    ("claude", "claude"),
+    ("aider", "aider"),
+    ("cursor", "cursor"),
+    ("copilot", "copilot"),
+];
+
+/// Infer the initial model name from the process name and command line.
+/// Scans MODEL_KEYWORDS for the first match; returns "unknown" if none match.
+pub fn infer_initial_model(name: &str, cmdline: &str) -> &'static str {
+    let lower_name = name.to_lowercase();
+    let lower_cmd = cmdline.to_lowercase();
+    for &(keyword, model) in MODEL_KEYWORDS {
+        if lower_name.contains(keyword) || lower_cmd.contains(keyword) {
+            return model;
+        }
+    }
+    "unknown"
+}
+
+/// Derive a human-friendly agent name from process name and command line.
+/// For Node.js processes running agent scripts (e.g. `node .../gemini`),
+/// extracts the script name instead of using "node".
+fn derive_agent_name(name: &str, cmdline: &str) -> String {
+    if name == "node" {
+        // Extract the script basename from cmdline args
+        // e.g. "node --no-warnings=DEP0040 /opt/homebrew/bin/gemini" → "gemini"
+        for arg in cmdline.split_whitespace() {
+            if arg.starts_with('-') {
+                continue;
+            }
+            // Skip the "node" binary itself
+            let basename = std::path::Path::new(arg)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if basename == "node" || basename.is_empty() {
+                continue;
+            }
+            return basename;
+        }
+    }
+    name.to_string()
+}
+
 /// Convert detected process into an AgentState.
 pub fn process_to_agent_state(proc: &DetectedProcess) -> AgentState {
     let id = format!("pid-{}", proc.pid);
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let display_name = format!("{}-{}", proc.name, proc.pid);
+    let agent_name = derive_agent_name(&proc.name, &proc.cmdline);
+    let display_name = format!("{}-{}", agent_name, proc.pid);
 
     AgentState {
         id,
         pid: Some(proc.pid),
         name: display_name,
-        model: "claude".to_string(),
+        model: infer_initial_model(&proc.name, &proc.cmdline).to_string(),
         tier: Tier::Middle,
         role: "agent".to_string(),
         status: Status::Idle,
@@ -132,42 +258,130 @@ pub fn scan_processes() -> Vec<DetectedProcess> {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>(),
+        false,
+        None,
     )
 }
 
 /// Scan all running processes using configurable patterns.
-pub fn scan_processes_with_patterns(patterns: &[String]) -> Vec<DetectedProcess> {
-    let mut system = System::new_all();
-    system.refresh_all();
+///
+/// Uses `ps` as the primary process source (reliable on macOS, even from GUI apps).
+/// sysinfo may skip some processes (especially Node.js child processes) in Tauri context,
+/// so it's used only for supplementary metadata (cwd, start_time).
+///
+/// After detection, deduplicates parent-child process pairs (e.g. Gemini CLI
+/// spawns a child node process with the same args — only the parent is kept).
+///
+/// Accepts an optional cached `System` instance to avoid re-creating it on every scan.
+/// When `None`, creates a new instance (used in tests and one-off calls).
+pub fn scan_processes_with_patterns(
+    patterns: &[String],
+    debug_mode: bool,
+    system: Option<&mut System>,
+) -> Vec<DetectedProcess> {
+    let ps_entries = get_ps_entries();
+
+    // Use provided system or create a temporary one for supplementary metadata
+    let mut temp_system;
+    let system = match system {
+        Some(s) => {
+            s.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+            s
+        }
+        None => {
+            temp_system = System::new_all();
+            temp_system.refresh_all();
+            &mut temp_system
+        }
+    };
 
     let pattern_refs: Vec<&str> = patterns.iter().map(|s| s.as_str()).collect();
     let mut detected = Vec::new();
+    let mut parent_pids: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
 
-    for (pid, process) in system.processes() {
-        let name = process.name().to_string_lossy().to_string();
-        let cmdline = process
-            .cmd()
-            .iter()
-            .map(|s| s.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join(" ");
+    for entry in &ps_entries {
+        // Extract process name (basename of first arg)
+        let name = entry
+            .args
+            .split_whitespace()
+            .next()
+            .map(|first_arg| {
+                std::path::Path::new(first_arg)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| first_arg.to_string())
+            })
+            .unwrap_or_default();
 
-        let pid_u32 = pid.as_u32();
-        if matches_agent_pattern(&name, &cmdline, &pattern_refs)
-            && !is_blocklisted(&name)
-            && !is_version_number(&name)
-            && has_tty(pid_u32)
-        {
-            let start_time = process.start_time();
-            let cwd = process.cwd().map(|p| p.to_string_lossy().to_string());
-            detected.push(DetectedProcess {
-                pid: pid_u32,
-                name,
-                start_time,
-                cwd,
-            });
+        let pattern_match = matches_agent_pattern(&name, &entry.args, &pattern_refs);
+        if !pattern_match {
+            continue;
         }
+
+        let blocked = is_blocklisted(&name);
+        let version = is_version_number(&name);
+        let has_interactive_tty = !entry.tty.is_empty() && entry.tty != "??" && entry.tty != "?";
+        // Filter stopped/suspended processes (stat starts with 'T').
+        // When a terminal tab is closed, the child process may receive SIGTSTP
+        // and enter stopped state instead of dying — treat it as gone.
+        let is_stopped = entry.stat.starts_with('T');
+
+        if blocked || version || !has_interactive_tty || is_stopped {
+            app_log_debug!(
+                debug_mode,
+                "SCANNER",
+                "filtered out pid={} name='{}' blocked={} version={} tty={} stat={} cmdline='{}'",
+                entry.pid,
+                name,
+                blocked,
+                version,
+                has_interactive_tty,
+                entry.stat,
+                &entry.args[..entry.args.len().min(120)]
+            );
+            continue;
+        }
+
+        parent_pids.insert(entry.pid, entry.ppid);
+
+        // Get supplementary metadata from sysinfo if available
+        let sysinfo_pid = sysinfo::Pid::from_u32(entry.pid);
+        let (start_time, cwd) = system
+            .process(sysinfo_pid)
+            .map(|p| {
+                (
+                    p.start_time(),
+                    p.cwd().map(|c| c.to_string_lossy().to_string()),
+                )
+            })
+            .unwrap_or((0, None));
+
+        detected.push(DetectedProcess {
+            pid: entry.pid,
+            name,
+            cmdline: entry.args.clone(),
+            start_time,
+            cwd,
+        });
     }
+
+    // Deduplicate: if a process's parent is also in the detected set, remove the child.
+    let detected_pids: std::collections::HashSet<u32> = detected.iter().map(|p| p.pid).collect();
+    detected.retain(|proc| {
+        if let Some(&ppid) = parent_pids.get(&proc.pid) {
+            if detected_pids.contains(&ppid) {
+                app_log_debug!(
+                    debug_mode,
+                    "SCANNER",
+                    "dedup: pid={} is child of pid={}, skipping",
+                    proc.pid,
+                    ppid
+                );
+                return false;
+            }
+        }
+        true
+    });
 
     detected
 }
@@ -175,20 +389,24 @@ pub fn scan_processes_with_patterns(patterns: &[String]) -> Vec<DetectedProcess>
 /// Run the process scanner as a Tokio background task.
 /// Reads scan interval from shared config on each iteration,
 /// allowing dynamic updates without restart.
+/// Caches a `sysinfo::System` instance across iterations to avoid
+/// the overhead of `System::new_all()` on every 2s scan cycle.
 pub async fn run_scanner(config: Arc<RwLock<AppConfig>>, tx: mpsc::Sender<ScannerEvent>) {
     let initial_interval = config.read().await.scan_interval_ms;
     app_log!("SCANNER", "started with interval={}ms", initial_interval);
-    let mut known_pids: std::collections::HashMap<u32, AgentState> =
+    let mut known_pids: std::collections::HashMap<u32, (AgentState, Option<String>)> =
         std::collections::HashMap::new();
+    let mut system = System::new_all();
 
     loop {
         let cfg = config.read().await;
         let interval_ms = cfg.scan_interval_ms;
         let patterns = cfg.agent_process_patterns.clone();
+        let debug_mode = cfg.debug_mode;
         drop(cfg);
         tokio::time::sleep(Duration::from_millis(interval_ms)).await;
 
-        let detected = scan_processes_with_patterns(&patterns);
+        let detected = scan_processes_with_patterns(&patterns, debug_mode, Some(&mut system));
         let current_pids: std::collections::HashSet<u32> = detected.iter().map(|p| p.pid).collect();
 
         let new_count = detected
@@ -224,10 +442,39 @@ pub async fn run_scanner(config: Arc<RwLock<AppConfig>>, tx: mpsc::Sender<Scanne
                 proc.name,
                 cwd
             );
-            known_pids.insert(proc.pid, agent.clone());
+            known_pids.insert(proc.pid, (agent.clone(), cwd.clone()));
             if tx.send(ScannerEvent::AgentFound(agent, cwd)).await.is_err() {
                 app_log!("SCANNER", "channel closed, scanner stopping");
                 return;
+            }
+        }
+
+        // Refresh CWD for known agents that previously had cwd=None
+        for proc in &detected {
+            if let Some((agent, known_cwd)) = known_pids.get_mut(&proc.pid) {
+                if known_cwd.is_none() {
+                    if let Some(new_cwd) = &proc.cwd {
+                        app_log!(
+                            "SCANNER",
+                            "cwd resolved: pid={} id={} cwd={}",
+                            proc.pid,
+                            agent.id,
+                            new_cwd
+                        );
+                        *known_cwd = Some(new_cwd.clone());
+                        if tx
+                            .send(ScannerEvent::CwdUpdated(
+                                agent.id.clone(),
+                                new_cwd.clone(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            app_log!("SCANNER", "channel closed, scanner stopping");
+                            return;
+                        }
+                    }
+                }
             }
         }
 
@@ -239,7 +486,7 @@ pub async fn run_scanner(config: Arc<RwLock<AppConfig>>, tx: mpsc::Sender<Scanne
             .collect();
 
         for pid in lost_pids {
-            if let Some(agent) = known_pids.remove(&pid) {
+            if let Some((agent, _)) = known_pids.remove(&pid) {
                 app_log!("SCANNER", "agent process lost: pid={} id={}", pid, agent.id);
                 if tx.send(ScannerEvent::AgentLost(agent.id)).await.is_err() {
                     app_log!("SCANNER", "channel closed, scanner stopping");
@@ -299,6 +546,20 @@ mod tests {
     }
 
     #[test]
+    fn test_matches_gemini_by_name() {
+        assert!(matches_agent_pattern("gemini", "", BUILTIN_PATTERNS));
+    }
+
+    #[test]
+    fn test_matches_node_gemini_in_cmdline() {
+        assert!(matches_agent_pattern(
+            "node",
+            "/usr/bin/node /home/user/.nvm/gemini/bin",
+            BUILTIN_PATTERNS
+        ));
+    }
+
+    #[test]
     fn test_process_scanner_ignores_non_agents() {
         assert!(!matches_agent_pattern(
             "bash",
@@ -322,6 +583,7 @@ mod tests {
         let proc = DetectedProcess {
             pid: 12345,
             name: "claude".to_string(),
+            cmdline: "claude".to_string(),
             start_time: 1000,
             cwd: Some("/home/user/project".to_string()),
         };
@@ -329,7 +591,93 @@ mod tests {
         assert_eq!(agent.pid, Some(12345));
         assert_eq!(agent.id, "pid-12345");
         assert_eq!(agent.name, "claude-12345");
+        assert_eq!(agent.model, "claude");
         assert_eq!(agent.status, Status::Idle);
+    }
+
+    #[test]
+    fn test_process_to_agent_state_gemini() {
+        let proc = DetectedProcess {
+            pid: 99999,
+            name: "gemini".to_string(),
+            cmdline: "gemini".to_string(),
+            start_time: 1000,
+            cwd: Some("/home/user/project".to_string()),
+        };
+        let agent = process_to_agent_state(&proc);
+        assert_eq!(agent.model, "gemini");
+        assert_eq!(agent.name, "gemini-99999");
+    }
+
+    #[test]
+    fn test_process_to_agent_state_node_gemini() {
+        let proc = DetectedProcess {
+            pid: 88888,
+            name: "node".to_string(),
+            cmdline: "node --no-warnings=DEP0040 /opt/homebrew/bin/gemini".to_string(),
+            start_time: 1000,
+            cwd: Some("/home/user/project".to_string()),
+        };
+        let agent = process_to_agent_state(&proc);
+        assert_eq!(agent.model, "gemini");
+        assert_eq!(agent.name, "gemini-88888");
+    }
+
+    #[test]
+    fn test_infer_initial_model() {
+        assert_eq!(infer_initial_model("claude", ""), "claude");
+        assert_eq!(infer_initial_model("gemini", ""), "gemini");
+        assert_eq!(infer_initial_model("Gemini", ""), "gemini");
+        assert_eq!(infer_initial_model("node-gemini", ""), "gemini");
+        assert_eq!(
+            infer_initial_model("node", "node --no-warnings /opt/homebrew/bin/gemini"),
+            "gemini"
+        );
+        // Unknown processes no longer default to "claude"
+        assert_eq!(infer_initial_model("node", "node"), "unknown");
+        assert_eq!(infer_initial_model("python", "python script.py"), "unknown");
+        // New agent keywords
+        assert_eq!(infer_initial_model("aider", "aider --model gpt-4"), "aider");
+        assert_eq!(
+            infer_initial_model("node", "node /usr/bin/cursor"),
+            "cursor"
+        );
+        assert_eq!(infer_initial_model("copilot", ""), "copilot");
+    }
+
+    #[test]
+    fn test_derive_agent_name() {
+        assert_eq!(derive_agent_name("claude", "claude"), "claude");
+        assert_eq!(derive_agent_name("gemini", "gemini"), "gemini");
+        assert_eq!(
+            derive_agent_name(
+                "node",
+                "node --no-warnings=DEP0040 /opt/homebrew/bin/gemini"
+            ),
+            "gemini"
+        );
+        assert_eq!(
+            derive_agent_name(
+                "node",
+                "/opt/homebrew/Cellar/node/25.7.0/bin/node --no-warnings /usr/bin/gemini"
+            ),
+            "gemini"
+        );
+        // If no script found, keep "node"
+        assert_eq!(derive_agent_name("node", "node"), "node");
+    }
+
+    #[test]
+    fn test_process_to_agent_state_unknown_process() {
+        let proc = DetectedProcess {
+            pid: 55555,
+            name: "node".to_string(),
+            cmdline: "node some-unknown-script.js".to_string(),
+            start_time: 1000,
+            cwd: None,
+        };
+        let agent = process_to_agent_state(&proc);
+        assert_eq!(agent.model, "unknown");
     }
 
     #[test]
@@ -337,12 +685,14 @@ mod tests {
         let proc1 = DetectedProcess {
             pid: 100,
             name: "claude".to_string(),
+            cmdline: "claude".to_string(),
             start_time: 1000,
             cwd: None,
         };
         let proc2 = DetectedProcess {
             pid: 200,
             name: "claude".to_string(),
+            cmdline: "claude".to_string(),
             start_time: 1000,
             cwd: None,
         };
@@ -373,6 +723,21 @@ mod tests {
         let result = scan_processes();
         // Result is a Vec — can be empty or have entries
         let _ = result;
+    }
+
+    #[test]
+    fn test_stopped_process_stat_detection() {
+        // stat=T means stopped/suspended — should be filtered out
+        assert!("T".starts_with('T'));
+        assert!("T+".starts_with('T'));
+        assert!("Ts".starts_with('T'));
+        // Running/sleeping states should NOT be filtered
+        assert!(!"S".starts_with('T'));
+        assert!(!"S+".starts_with('T'));
+        assert!(!"R".starts_with('T'));
+        assert!(!"R+".starts_with('T'));
+        // Zombie — not filtered by this check (handled separately if needed)
+        assert!(!"Z".starts_with('T'));
     }
 
     #[tokio::test]

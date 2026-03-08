@@ -54,6 +54,16 @@ describe("test_state_transition_valid", () => {
     ctrl.transition("error");
     expect(ctrl.getStatus()).toBe("error");
   });
+
+  it("error -> walking_to_desk is allowed (leave desk on error)", () => {
+    const sprite = makeMockSprite();
+    const ctrl = new AnimationController(sprite);
+
+    ctrl.transition("error");
+    ctrl.destroy();
+    ctrl.transition("walking_to_desk");
+    expect(ctrl.getStatus()).toBe("walking_to_desk");
+  });
 });
 
 describe("test_state_transition_invalid", () => {

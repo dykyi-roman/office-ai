@@ -22,22 +22,23 @@ OfficeAI is a Tauri v2 desktop application that visualizes running AI agents (Cl
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        OS / File System                                 │
 │                                                                         │
-│  OS Processes (sysinfo)            ~/.claude/projects/*/*.jsonl          │
+│  OS Processes (ps + sysinfo)       ~/.claude/projects/*/*.jsonl         │
+│                                    ~/.gemini/tmp/*/chats/session-*.json │
 │         │                                    │                          │
 └─────────┼────────────────────────────────────┼──────────────────────────┘
           │                                    │
 ┌─────────┼────────────────────────────────────┼──────────────────────────┐
 │         ▼                                      ▼                        │
-│  ┌───────────────┐                  ┌──────────────────┐                │
-│  │Process Scanner│                  │   Log Watcher    │                │
-│  │  (every 2s)   │                  │  (every 500ms)   │                │
-│  └──────┬────────┘                  └────────┬─────────┘                │
+│  ┌───────────────┐                  ┌────────────────────┐              │
+│  │Process Scanner│                  │   Log Watcher      │              │
+│  │  (every 2s)   │                  │ (500ms, JSONL+JSON)│              │
+│  └──────┬────────┘                  └────────┬───────────┘              │
 │         │ ScannerEvent                       │ RawLogLine               │
 │         ▼                                    ▼                          │
-│  ┌──────────────┐     ┌──────────────┐ ┌──────────────────┐             │
-│  │   Scanner    │     │ JSONL Parser │ │ State Classifier │             │
-│  │   Consumer   │     │              │→│   (FSM 300ms)    │             │
-│  └──────┬───────┘     └──────────────┘ └────────┬─────────┘             │
+│  ┌──────────────┐     ┌───────────────┐ ┌──────────────────┐            │
+│  │   Scanner    │     │ Parser Reg.   │ │ State Classifier │            │
+│  │   Consumer   │     │(Claude+Gemini)│→│  (FSM 300ms)     │            │
+│  └──────┬───────┘     └───────────────┘ └────────┬─────────┘            │
 │         │                                       │                       │
 │         ▼                                       ▼                       │
 │  ┌─────────────────────────────────────────────────────────┐            │
@@ -66,11 +67,11 @@ OfficeAI is a Tauri v2 desktop application that visualizes running AI agents (Cl
 
 ### Project Structure
 
-| Directory                                    | Documentation                      | Description                                                       |
-|----------------------------------------------|------------------------------------|-------------------------------------------------------------------|
-| [`src/`](../src/)                            | [FRONTEND.md](./FRONTEND.md)       | TypeScript frontend — Svelte 5, PixiJS v8, stores, UI components  |
-| [`src-tauri/`](../src-tauri/)                | [BACKEND.md](./BACKEND.md)         | Rust backend — process scanner, log parser, state classifier, IPC |
-| [`scripts/`](../scripts/)                    | —                                  | Asset generation scripts (sprites, tiles, effects)                |
+| Directory                     | Documentation                | Description                                                       |
+|-------------------------------|------------------------------|-------------------------------------------------------------------|
+| [`src/`](../src/)             | [FRONTEND.md](./FRONTEND.md) | TypeScript frontend — Svelte 5, PixiJS v8, stores, UI components  |
+| [`src-tauri/`](../src-tauri/) | [BACKEND.md](./BACKEND.md)   | Rust backend — process scanner, log parser, state classifier, IPC |
+| [`scripts/`](../scripts/)     | —                            | Asset generation scripts (sprites, tiles, effects)                |
 
 ---
 
@@ -123,7 +124,7 @@ y = cy + (u + v) × 32  // screen Y
 
 | Tier      | Body (color) | Accent     | Clothing             | Badge             |
 |-----------|-------------|------------|----------------------|-------------------|
-| Teamlead  | #1a2744     | #c9a227    | Suit + gold          | Gold + star       |
+| Expert    | #1a2744     | #c9a227    | Suit + gold          | Gold + star       |
 | Senior    | #2456a4     | #1a3a6e    | Shirt + 3 buttons    | Blue + checkmark  |
 | Middle    | #4a7c59     | #6b6b6b    | Hoodie + pocket      | Green + leaf      |
 | Junior    | #e07b39     | #cccccc    | T-shirt              | None              |
@@ -152,7 +153,7 @@ interface AgentState {
   pid: number | null;      // OS process PID (null for browser extension)
   name: string;            // "claude-1", "ChatGPT"
   model: string;           // "claude-opus-4", "gpt-4o"
-  tier: Tier;              // flagship | senior | middle | junior
+  tier: Tier;              // expert | senior | middle | junior
   role: string;            // "agent" or "ai-assistant"
   status: Status;          // 9 variants (see below)
   idleLocation: IdleLocation;  // 9 zone types
@@ -171,7 +172,7 @@ interface AgentState {
 type Status = "idle" | "walking_to_desk" | "thinking" | "responding"
             | "tool_use" | "collaboration" | "task_complete" | "error" | "offline";
 
-type Tier = "flagship" | "senior" | "middle" | "junior";
+type Tier = "expert" | "senior" | "middle" | "junior";
 
 type IdleLocation = "water_cooler" | "kitchen" | "sofa" | "meeting_room"
                   | "standing_desk" | "desk" | "bathroom" | "hr_zone" | "lounge";
@@ -209,7 +210,7 @@ interface AppStats {
 }
 ```
 
-### AppConfig (13 fields)
+### AppConfig (14 fields)
 
 ```typescript
 interface AppConfig {
@@ -226,6 +227,7 @@ interface AppConfig {
   logRoots: string[];                 // default: ["~/.claude/projects"]
   workTimeoutMs: number;              // default: 120000 (Thinking/ToolUse → Idle)
   respondingTimeoutMs: number;        // default: 30000 (Responding → Idle)
+  debugMode: boolean;                 // default: false
 }
 ```
 
@@ -238,7 +240,7 @@ ParsedEvent      = { status, model?, current_task?, tokens_in?, tokens_out?, sub
 TransitionResult = Updated(Status) | Debounced | InvalidTransition
 ClassifiedState  = { status: Status, last_change: Instant }
 Auto-Idle msg    = (String, Status, Instant)  // (agent_id, new_status, scheduled_at)
-DetectedProcess  = { pid: u32, name: String, start_time: u64 }
+DetectedProcess  = { pid: u32, name: String, cmdline: String, start_time: u64, cwd: Option<String> }
 ```
 
 ---
@@ -263,24 +265,30 @@ Optimal pathfinding on an isometric grid with 8-directional movement.
 - Stale timer protection: each timer carries `scheduled_at`, consumer checks `last_activity`
 - Sub-agents guard: auto-idle is **not applied** if the agent has active sub_agents
 
-### 4.3. Process Filtering
+### 4.3. Process Detection (Hybrid: ps + sysinfo)
 
+Both Claude Code and Gemini CLI are detected by the same hybrid approach:
+
+1. **`ps axo pid,ppid,tty,stat,args`** (Unix) — primary process enumeration, provides PID, PPID, TTY, stat, cmdline. On Windows, `sysinfo` serves as the enumeration fallback since `ps` is unavailable.
+2. **`sysinfo::System`** — supplementary metadata only (cwd, start_time) for already-detected PIDs. A cached `System` instance is reused across scan cycles, refreshed via `refresh_processes()` instead of `new_all()`.
+3. **4-stage filtering pipeline:**
 ```
 regex match → blocklist check → version filter → TTY check
 ```
-4-stage pipeline filtering with fallback to substring match.
+4. **Parent-child deduplication** — if both parent and child match (e.g. Gemini CLI spawns a child node process), only the parent is kept.
 
 ### 4.4. Log-ID → Registry-ID Resolution
 
-4-step algorithm with caching and staleness control:
+5-step algorithm with caching and staleness control:
 1. **Direct match** — log_id exists in registry
 2. **Cached mapping** — `HashMap<log_id, (pid_id, last_seen)>`, with stale entry cleanup
-3. **CWD matching** — prefix matching in both directions, never-mapped preference, 30s staleness
-4. **Fallback** — log_id as-is (events are ignored by registry)
+3. **CWD matching** — prefix matching in both directions, never-mapped preference, 30s staleness, deterministic PID tiebreaker (lowest PID wins among equal candidates)
+4. **Model-hint fallback** — when CWD is unavailable (e.g. Gemini CLI), match by model affinity among unmapped pid-* agents
+5. **Fallback** — log_id as-is (events are ignored by registry)
 
 ### 4.5. Desk Assignment with Tier Priority
 
-flagship/senior → priority desks (first N). Fallback to standard. Random selection among available desks.
+expert/senior → priority desks (first N). Fallback to standard. Random selection among available desks.
 
 ### 4.6. Idle Zone Rotation with Capacity
 
@@ -300,7 +308,7 @@ Per-tick: calculate distance to next tile. On arrival — snap + pop from walkPa
 
 ### 4.10. Token Accumulation
 
-Tokens are summed on each ParsedEvent regardless of FSM debounce. `tokens_in` includes cache_read and cache_creation.
+Tokens are summed on each ParsedEvent regardless of FSM debounce. Claude: `tokens_in = input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. Gemini: `tokens_in = tokens.input` (cache tokens parsed but not included in the sum).
 
 ### 4.11. Sub-Agent Tracking
 
@@ -394,7 +402,7 @@ src-tauri/src/*/mod.rs         — Rust unit tests
 
 Stored in `~/.config/office-ai/config.toml`.
 
-**13 fields** with defaults: scan_interval_ms=2000, idle_timeout_ms=3000, state_debounce_ms=300, work_timeout_ms=120000, responding_timeout_ms=30000, max_agents=20, animation_speed=1.0, theme="modern", sound_enabled=false, show_agent_metrics=true, agent_process_patterns=["claude","node.*claude"], log_roots=["~/.claude/projects"].
+**14 fields** with defaults: scan_interval_ms=2000, idle_timeout_ms=3000, state_debounce_ms=300, work_timeout_ms=120000, responding_timeout_ms=30000, max_agents=20, animation_speed=1.0, theme="modern", sound_enabled=false, show_agent_metrics=true, agent_process_patterns=["claude","node.*claude","gemini","node.*gemini"], log_roots=["~/.claude/projects","~/.gemini/tmp"], debug_mode=false.
 
 **Frontend-only settings** (not in config.toml): `showPrompts` (speech bubbles), `debugMode`, `language` (11 locales).
 

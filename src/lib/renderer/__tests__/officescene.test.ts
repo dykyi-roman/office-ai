@@ -317,6 +317,7 @@ type Status = "idle" | "thinking" | "responding" | "tool_use" | "task_complete" 
 
 const WORK_STATUSES: ReadonlySet<Status> = new Set(["thinking", "responding", "tool_use"]);
 const IDLE_STATUSES: ReadonlySet<Status> = new Set(["idle", "collaboration"]);
+const LEAVE_DESK_STATUSES: ReadonlySet<Status> = new Set(["error"]);
 
 type TransitionAction = "move_to_desk" | "move_to_idle" | "visual_only";
 
@@ -326,7 +327,7 @@ function resolveTransition(location: AgentLocationState | undefined, status: Sta
 
   if ((location === "idle_zone" || location === "walking_to_idle") && isWork) {
     return "move_to_desk";
-  } else if ((location === "desk" || location === "walking_to_desk") && isIdle) {
+  } else if ((location === "desk" || location === "walking_to_desk") && (isIdle || LEAVE_DESK_STATUSES.has(status))) {
     return "move_to_idle";
   } else {
     return "visual_only";
@@ -369,8 +370,12 @@ describe("OfficeScene — onAgentStateChanged location transitions", () => {
     expect(resolveTransition("idle_zone", "task_complete")).toBe("visual_only");
   });
 
-  it("does visual-only update for non-work/non-idle statuses (error, offline)", () => {
-    expect(resolveTransition("desk", "error")).toBe("visual_only");
+  it("moves agent to idle zone when error arrives at desk", () => {
+    expect(resolveTransition("desk", "error")).toBe("move_to_idle");
+    expect(resolveTransition("walking_to_desk", "error")).toBe("move_to_idle");
+  });
+
+  it("does visual-only update for offline status at idle zone", () => {
     expect(resolveTransition("idle_zone", "offline")).toBe("visual_only");
   });
 

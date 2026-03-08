@@ -86,8 +86,8 @@ describe("statusColor", () => {
 });
 
 describe("tierColor", () => {
-  it("flagship gets gold", () => {
-    expect(tierColor("flagship")).toBe("#ffd700");
+  it("expert gets gold", () => {
+    expect(tierColor("expert")).toBe("#ffd700");
   });
 
   it("senior gets blue", () => {
@@ -98,8 +98,8 @@ describe("tierColor", () => {
     expect(tierColor("middle")).toBe("#22c55e");
   });
 
-  it("junior gets orange", () => {
-    expect(tierColor("junior")).toBe("#f97316");
+  it("junior gets grey", () => {
+    expect(tierColor("junior")).toBe("#9ca3af");
   });
 });
 

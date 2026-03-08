@@ -59,6 +59,7 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value,
             .map(|p| p.to_string_lossy().to_string())
             .collect::<Vec<_>>()
             .join("\n"),
+        "debugMode": config.debug_mode,
     }))
 }
 
@@ -229,6 +230,11 @@ pub fn apply_config_value(config: &mut AppConfig, key: &str, value: &str) -> Res
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from)
                 .collect();
+        }
+        "debug_mode" | "debugMode" => {
+            config.debug_mode = value
+                .parse::<bool>()
+                .map_err(|_| format!("Invalid boolean for {key}: {value}"))?;
         }
         _ => {
             return Err(format!("Unknown config key: {key}"));
@@ -433,6 +439,29 @@ mod tests {
         let mut config = AppConfig::default();
         apply_config_value(&mut config, "respondingTimeoutMs", "20000").unwrap();
         assert_eq!(config.responding_timeout_ms, 20_000);
+    }
+
+    #[test]
+    fn test_apply_config_debug_mode_true() {
+        let mut config = AppConfig::default();
+        assert!(!config.debug_mode);
+        apply_config_value(&mut config, "debugMode", "true").unwrap();
+        assert!(config.debug_mode);
+    }
+
+    #[test]
+    fn test_apply_config_debug_mode_false() {
+        let mut config = AppConfig::default();
+        config.debug_mode = true;
+        apply_config_value(&mut config, "debugMode", "false").unwrap();
+        assert!(!config.debug_mode);
+    }
+
+    #[test]
+    fn test_apply_config_debug_mode_snake_case() {
+        let mut config = AppConfig::default();
+        apply_config_value(&mut config, "debug_mode", "true").unwrap();
+        assert!(config.debug_mode);
     }
 
     #[test]

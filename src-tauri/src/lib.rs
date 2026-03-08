@@ -10,10 +10,13 @@ mod ipc;
 mod models;
 
 use discovery::agent_registry::new_shared_registry;
+use discovery::log_reader::LogFileReader;
 use discovery::log_watcher::{run_log_watcher, RawLogLine};
 use discovery::process_scanner::{run_scanner, ScannerEvent};
 use interceptor::claude_code_parser::ClaudeCodeParser;
+use interceptor::gemini_cli_parser::GeminiCliParser;
 use interceptor::parser_registry::ParserRegistry;
+use interceptor::parser_trait::AgentLogParser;
 use interceptor::state_classifier::{StateClassifier, TransitionResult};
 use ipc::commands::{
     generate_bug_report, get_agent, get_all_agents, get_config, get_stats, set_config, AppState,
@@ -31,13 +34,14 @@ pub fn run() {
     let config = load_config_or_default();
     app_log!(
         "INIT",
-        "config loaded: scan_interval={}ms, max_agents={}, idle_timeout={}ms, debounce={}ms, work_timeout={}ms, responding_timeout={}ms",
+        "config loaded: scan_interval={}ms, max_agents={}, idle_timeout={}ms, debounce={}ms, work_timeout={}ms, responding_timeout={}ms, debug_mode={}",
         config.scan_interval_ms,
         config.max_agents,
         config.idle_timeout_ms,
         config.state_debounce_ms,
         config.work_timeout_ms,
-        config.responding_timeout_ms
+        config.responding_timeout_ms,
+        config.debug_mode
     );
     let config = Arc::new(RwLock::new(config));
 
@@ -97,24 +101,55 @@ pub fn run() {
                 run_scanner(scan_config, scanner_tx).await;
             });
 
-            // Build parser registry — register all known parsers
+            // Build parser registry — each parser is self-contained:
+            // it knows its log roots, directory resolution, file format, and ID derivation.
+            let parsers: Vec<Arc<dyn AgentLogParser>> = vec![
+                Arc::new(ClaudeCodeParser),
+                Arc::new(GeminiCliParser),
+            ];
+
             let mut parser_registry = ParserRegistry::new();
-            let claude_idx = parser_registry.register_parser(Arc::new(ClaudeCodeParser));
-            // Bind Claude Code's default log directory
-            if let Some(home) = dirs::home_dir() {
-                let claude_projects = home.join(".claude").join("projects");
-                parser_registry.bind_directory(claude_projects, claude_idx);
+            let mut readers: Vec<Box<dyn LogFileReader>> = Vec::new();
+            let mut watch_dirs: Vec<std::path::PathBuf> = Vec::new();
+
+            for parser in &parsers {
+                let idx = parser_registry.register_parser(Arc::clone(parser));
+                for root in parser.log_roots() {
+                    parser_registry.bind_directory(root.clone(), idx);
+                    watch_dirs.extend(parser.resolve_log_dirs(&root));
+                }
+                readers.push(parser.create_reader());
             }
+
             let parser_registry = Arc::new(parser_registry);
+
+            // Append user-configured log_roots (for custom directories not covered by parsers)
+            {
+                let cfg = config.blocking_read();
+                for root in &cfg.log_roots {
+                    if !watch_dirs.iter().any(|d| d.starts_with(root) || root.starts_with(d))
+                        && root.is_dir()
+                    {
+                        watch_dirs.extend(
+                            std::fs::read_dir(root)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|e| e.ok())
+                                .map(|e| e.path())
+                                .filter(|p| p.is_dir()),
+                        );
+                    }
+                }
+            }
 
             // Spawn log watcher task
             let log_config = Arc::clone(&config);
             tauri::async_runtime::spawn(async move {
-                let (log_roots, custom_paths) = {
+                let custom_paths = {
                     let cfg = log_config.read().await;
-                    (cfg.log_roots.clone(), cfg.custom_log_paths.clone())
+                    cfg.custom_log_paths.clone()
                 };
-                if let Err(e) = run_log_watcher(log_roots, custom_paths, log_tx).await {
+                if let Err(e) = run_log_watcher(readers, watch_dirs, custom_paths, log_tx).await {
                     app_log!("WATCHER", "log watcher stopped with error: {}", e);
                 }
             });
@@ -149,6 +184,10 @@ pub fn run() {
                             cwd_map_for_scanner.write().await.remove(id);
                             reg.remove(id, &handle_scanner);
                         }
+                        ScannerEvent::CwdUpdated(ref id, ref cwd) => {
+                            app_log!("SCANNER", "CwdUpdated: id={} cwd={}", id, cwd);
+                            cwd_map_for_scanner.write().await.insert(id.clone(), cwd.clone());
+                        }
                     }
                 }
                 app_log!("SCANNER", "scanner channel closed, consumer stopping");
@@ -179,12 +218,13 @@ pub fn run() {
                     app_log!("LOG_RX", "line from {:?} ({}B)", raw.path.file_name(), raw.line.len());
 
                     if let Some(event) = parser_for_logs.parse_line(&raw.path, &raw.line) {
-                        let log_id = path_to_agent_id(&raw.path);
+                        let log_id = parser_for_logs.path_to_agent_id(&raw.path);
+                        let model_hint = parser_for_logs.model_hint_for_path(&raw.path);
 
                         let agent_id = {
                             let reg = registry_for_logs.read().await;
                             let cwd_map = cwd_map_for_logs.read().await;
-                            resolve_agent_id(&log_id, &mut log_to_registry, &reg, event.cwd.as_deref(), &cwd_map)
+                            resolve_agent_id(&log_id, &mut log_to_registry, &reg, event.cwd.as_deref(), &cwd_map, model_hint.as_deref())
                         };
 
                         app_log!("LOG_PARSE", "status={:?} model={:?} log_id={} → agent_id={}", event.status, event.model, log_id, agent_id);
@@ -268,6 +308,11 @@ pub fn run() {
                                 // while the agent is actively working.
                                 if is_updated || is_debounced || has_completed_subs {
                                     agent.last_activity = chrono::Utc::now().to_rfc3339();
+                                }
+                                // Clear sub-agents on new user prompt or terminal states
+                                // (new task starts — old sub-agents are irrelevant)
+                                if matches!(agent.status, models::Status::Thinking | models::Status::TaskComplete | models::Status::Error | models::Status::Idle) {
+                                    agent.sub_agents.clear();
                                 }
                                 agent.sub_agents.extend(event.sub_agents.clone());
                                 // Remove completed sub-agents by matching tool_use_id
@@ -381,7 +426,7 @@ fn load_config_or_default() -> AppConfig {
         return AppConfig::default();
     }
 
-    match std::fs::read_to_string(&path) {
+    let mut config: AppConfig = match std::fs::read_to_string(&path) {
         Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
             app_log!("INIT", "config parse error (using defaults): {}", e);
             AppConfig::default()
@@ -390,36 +435,19 @@ fn load_config_or_default() -> AppConfig {
             app_log!("INIT", "config read error (using defaults): {}", e);
             AppConfig::default()
         }
-    }
-}
+    };
 
-/// Derive a unique agent id from a log file path.
-/// Combines parent project directory name with session UUID prefix to ensure
-/// multiple sessions in the same project get distinct IDs.
-fn path_to_agent_id(path: &std::path::Path) -> String {
-    // Real path: ~/.claude/projects/<project-dir>/<session-uuid>.jsonl
-    let parent_name = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    let session_suffix = path
-        .file_stem()
-        .map(|s| {
-            let s = s.to_string_lossy();
-            if s.len() > 8 {
-                s[..8].to_string()
-            } else {
-                s.to_string()
-            }
-        })
-        .unwrap_or_default();
-
-    if session_suffix.is_empty() {
-        format!("log-{parent_name}")
-    } else {
-        format!("log-{parent_name}--{session_suffix}")
+    // Migrate: ensure new default patterns/roots are present in old configs
+    if config.ensure_defaults() {
+        app_log!(
+            "INIT",
+            "config migrated: patterns={:?} log_roots={:?}",
+            config.agent_process_patterns,
+            config.log_roots
+        );
     }
+
+    config
 }
 
 /// Resolve a log-derived agent ID to the actual registry ID.
@@ -442,6 +470,7 @@ fn resolve_agent_id(
     registry: &discovery::agent_registry::AgentRegistry,
     log_cwd: Option<&str>,
     agent_cwd_map: &std::collections::HashMap<String, String>,
+    model_hint: Option<&str>,
 ) -> String {
     const MAPPING_STALE_SECS: u64 = 30;
 
@@ -499,8 +528,39 @@ fn resolve_agent_id(
             }
         }
 
-        // Prefer never-mapped agents (priority 0) over previously-mapped ones (priority 1)
-        candidates.sort_by_key(|id| if ever_mapped.contains(id) { 1u8 } else { 0u8 });
+        // Filter candidates by model affinity when model_hint is available.
+        // This prevents a Claude log from matching a Gemini process (and vice versa)
+        // when the only CWD-matching candidate has a different model.
+        if let Some(hint) = model_hint {
+            let model_filtered: Vec<String> = candidates
+                .iter()
+                .filter(|id| {
+                    registry
+                        .get(id)
+                        .map(|agent| agent.model.to_lowercase().contains(hint))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            if !model_filtered.is_empty() {
+                candidates = model_filtered;
+            } else {
+                // No model-matching candidates — clear all to fall through
+                candidates.clear();
+            }
+        }
+
+        // Sort remaining candidates by preference:
+        // 1. Never-mapped agents preferred over previously-mapped (0 vs 1)
+        // 2. Deterministic PID tiebreaker (lowest PID wins among equal candidates)
+        candidates.sort_by_key(|id| {
+            let mapped = if ever_mapped.contains(id) { 1u8 } else { 0u8 };
+            let pid_num: u64 = id
+                .strip_prefix("pid-")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(u64::MAX);
+            (mapped, pid_num)
+        });
 
         if let Some(best_id) = candidates.first() {
             app_log!(
@@ -509,6 +569,62 @@ fn resolve_agent_id(
                 log_id,
                 best_id,
                 cwd,
+                candidates.len()
+            );
+            mapping.insert(log_id.to_string(), (best_id.clone(), now));
+            return best_id.clone();
+        }
+    }
+
+    // 4. Model-hint fallback — match by model_hint among unmapped pid-* agents
+    //    that have no CWD (sysinfo couldn't read it) or when log_cwd is unavailable
+    //    (e.g. Gemini CLI logs). This covers the case where the scanner found a
+    //    process but couldn't determine its working directory.
+    if let Some(hint) = model_hint {
+        let now = std::time::Instant::now();
+        let already_mapped: std::collections::HashSet<&String> = mapping
+            .iter()
+            .filter(|(_, (_, last_seen))| {
+                now.duration_since(*last_seen).as_secs() < MAPPING_STALE_SECS
+            })
+            .map(|(_, (pid, _))| pid)
+            .collect();
+
+        let ever_mapped: std::collections::HashSet<&String> =
+            mapping.iter().map(|(_, (pid, _))| pid).collect();
+
+        let mut candidates: Vec<String> = Vec::new();
+        for agent in registry.get_all() {
+            if !agent.id.starts_with("pid-") || already_mapped.contains(&agent.id) {
+                continue;
+            }
+            // Only consider agents without CWD (couldn't be matched in step 3)
+            // or all agents when log_cwd is unavailable
+            let agent_has_cwd = agent_cwd_map.contains_key(&agent.id);
+            if log_cwd.is_some() && agent_has_cwd {
+                continue;
+            }
+            if agent.model.to_lowercase().contains(hint) || agent.model.is_empty() {
+                candidates.push(agent.id.clone());
+            }
+        }
+
+        candidates.sort_by_key(|id| {
+            let mapped = if ever_mapped.contains(id) { 1u8 } else { 0u8 };
+            let pid_num: u64 = id
+                .strip_prefix("pid-")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(u64::MAX);
+            (mapped, pid_num)
+        });
+
+        if let Some(best_id) = candidates.first() {
+            app_log!(
+                "LOG_MATCH",
+                "{} → model-hint fallback → {} (hint={}, candidates={})",
+                log_id,
+                best_id,
+                hint,
                 candidates.len()
             );
             mapping.insert(log_id.to_string(), (best_id.clone(), now));
@@ -552,19 +668,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_path_to_agent_id_from_project_path() {
-        let path = std::path::Path::new(
-            "/home/user/.claude/projects/-Users-me-myproject/8fea29d9-1234-5678-abcd-ef0123456789.jsonl",
-        );
-        assert_eq!(path_to_agent_id(path), "log--Users-me-myproject--8fea29d9");
-    }
-
-    #[test]
-    fn test_path_to_agent_id_short_filename() {
-        let path =
-            std::path::Path::new("/home/user/.claude/projects/-Users-me-myproject/abc.jsonl");
-        assert_eq!(path_to_agent_id(path), "log--Users-me-myproject--abc");
+    fn make_agent_with_model(id: &str, model: &str) -> AgentState {
+        AgentState {
+            model: model.to_string(),
+            ..make_agent(id)
+        }
     }
 
     #[test]
@@ -574,7 +682,14 @@ mod tests {
         let mut mapping = std::collections::HashMap::new();
         let cwd_map = std::collections::HashMap::new();
 
-        let result = resolve_agent_id("log-myproject", &mut mapping, &registry, None, &cwd_map);
+        let result = resolve_agent_id(
+            "log-myproject",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            None,
+        );
         assert_eq!(result, "log-myproject");
         assert!(mapping.is_empty());
     }
@@ -593,6 +708,7 @@ mod tests {
             &registry,
             Some("/home/user/myproject"),
             &cwd_map,
+            None,
         );
         assert_eq!(result, "pid-12345");
         assert_eq!(
@@ -612,7 +728,14 @@ mod tests {
         );
         let cwd_map = std::collections::HashMap::new();
 
-        let result = resolve_agent_id("log-myproject", &mut mapping, &registry, None, &cwd_map);
+        let result = resolve_agent_id(
+            "log-myproject",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            None,
+        );
         assert_eq!(result, "pid-12345");
     }
 
@@ -626,7 +749,14 @@ mod tests {
         );
         let cwd_map = std::collections::HashMap::new();
 
-        let result = resolve_agent_id("log-myproject", &mut mapping, &registry, None, &cwd_map);
+        let result = resolve_agent_id(
+            "log-myproject",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            None,
+        );
         // Agent pid-99999 not in registry — returns log ID as fallback
         assert_eq!(result, "log-myproject");
         assert!(!mapping.contains_key("log-myproject"));
@@ -638,7 +768,14 @@ mod tests {
         let mut mapping = std::collections::HashMap::new();
         let cwd_map = std::collections::HashMap::new();
 
-        let result = resolve_agent_id("log-myproject", &mut mapping, &registry, None, &cwd_map);
+        let result = resolve_agent_id(
+            "log-myproject",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            None,
+        );
         assert_eq!(result, "log-myproject");
     }
 
@@ -659,6 +796,7 @@ mod tests {
             &registry,
             Some("/home/user/project-c"),
             &cwd_map,
+            None,
         );
         assert_eq!(result, "log-project-c");
         assert!(mapping.is_empty());
@@ -681,6 +819,7 @@ mod tests {
             &registry,
             Some("/home/user/project-b"),
             &cwd_map,
+            None,
         );
         assert_eq!(result, "pid-200");
     }
@@ -701,6 +840,7 @@ mod tests {
             &registry,
             Some("/home/user/project/src/subdir"),
             &cwd_map,
+            None,
         );
         assert_eq!(result, "pid-100");
     }
@@ -724,6 +864,7 @@ mod tests {
             &registry,
             Some("/home/user/myproject"),
             &cwd_map,
+            None,
         );
         let result2 = resolve_agent_id(
             log_id_2,
@@ -731,6 +872,7 @@ mod tests {
             &registry,
             Some("/home/user/myproject"),
             &cwd_map,
+            None,
         );
 
         assert!(result1.starts_with("pid-"));
@@ -761,6 +903,7 @@ mod tests {
             &registry,
             Some("/home/user/myproject"),
             &cwd_map,
+            None,
         );
         resolve_agent_id(
             log_id_2,
@@ -768,6 +911,7 @@ mod tests {
             &registry,
             Some("/home/user/myproject"),
             &cwd_map,
+            None,
         );
         let result3 = resolve_agent_id(
             log_id_3,
@@ -775,6 +919,7 @@ mod tests {
             &registry,
             Some("/home/user/myproject"),
             &cwd_map,
+            None,
         );
 
         assert_eq!(
@@ -804,6 +949,7 @@ mod tests {
             &registry,
             Some("/home/user/project"),
             &cwd_map,
+            None,
         );
         assert_eq!(
             result, "pid-100",
@@ -840,6 +986,7 @@ mod tests {
             &registry,
             Some("/home/user/project"),
             &cwd_map,
+            None,
         );
         assert_eq!(
             result, "pid-200",
@@ -868,10 +1015,301 @@ mod tests {
             &registry,
             Some("/home/user/project"),
             &cwd_map,
+            None,
         );
         assert_eq!(
             result, "pid-100",
             "Should fall back to stale-mapped agent when no unmapped candidates exist"
+        );
+    }
+
+    #[test]
+    fn test_resolve_prefers_matching_model_by_hint() {
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "gemini"));
+        registry.insert_for_test(make_agent_with_model("pid-200", "claude"));
+        let mut mapping = std::collections::HashMap::new();
+        let mut cwd_map = std::collections::HashMap::new();
+        cwd_map.insert("pid-100".to_string(), "/home/user/project".to_string());
+        cwd_map.insert("pid-200".to_string(), "/home/user/project".to_string());
+
+        // Claude log should map to pid-200 (claude), not pid-100 (gemini)
+        let result = resolve_agent_id(
+            "log-project--claude-session",
+            &mut mapping,
+            &registry,
+            Some("/home/user/project"),
+            &cwd_map,
+            Some("claude"),
+        );
+        assert_eq!(
+            result, "pid-200",
+            "Claude log should prefer Claude agent over Gemini agent with same CWD"
+        );
+    }
+
+    #[test]
+    fn test_resolve_deterministic_pid_tiebreaker() {
+        let mut registry = AgentRegistry::new();
+        // Both agents have same model and CWD — PID tiebreaker decides
+        registry.insert_for_test(make_agent_with_model("pid-300", "claude"));
+        registry.insert_for_test(make_agent_with_model("pid-100", "claude"));
+        registry.insert_for_test(make_agent_with_model("pid-200", "claude"));
+        let mut mapping = std::collections::HashMap::new();
+        let mut cwd_map = std::collections::HashMap::new();
+        cwd_map.insert("pid-100".to_string(), "/home/user/project".to_string());
+        cwd_map.insert("pid-200".to_string(), "/home/user/project".to_string());
+        cwd_map.insert("pid-300".to_string(), "/home/user/project".to_string());
+
+        // Should always pick lowest PID (100) when model and mapped status are equal
+        let result = resolve_agent_id(
+            "log-project--session",
+            &mut mapping,
+            &registry,
+            Some("/home/user/project"),
+            &cwd_map,
+            Some("claude"),
+        );
+        assert_eq!(
+            result, "pid-100",
+            "Should deterministically pick lowest PID among equal candidates"
+        );
+    }
+
+    #[test]
+    fn test_resolve_gemini_log_prefers_gemini_agent() {
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "claude"));
+        registry.insert_for_test(make_agent_with_model("pid-200", "gemini"));
+        let mut mapping = std::collections::HashMap::new();
+        let mut cwd_map = std::collections::HashMap::new();
+        cwd_map.insert("pid-100".to_string(), "/home/user/project".to_string());
+        cwd_map.insert("pid-200".to_string(), "/home/user/project".to_string());
+
+        // Gemini log should map to pid-200 (gemini), not pid-100 (claude)
+        let result = resolve_agent_id(
+            "log-project--gemini-session",
+            &mut mapping,
+            &registry,
+            Some("/home/user/project"),
+            &cwd_map,
+            Some("gemini"),
+        );
+        assert_eq!(
+            result, "pid-200",
+            "Gemini log should prefer Gemini agent over Claude agent with same CWD"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_hint_with_no_hint_still_works() {
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "gemini"));
+        registry.insert_for_test(make_agent_with_model("pid-200", "claude"));
+        let mut mapping = std::collections::HashMap::new();
+        let mut cwd_map = std::collections::HashMap::new();
+        cwd_map.insert("pid-100".to_string(), "/home/user/project".to_string());
+        cwd_map.insert("pid-200".to_string(), "/home/user/project".to_string());
+
+        // No model hint — should still pick one (doesn't matter which)
+        let result = resolve_agent_id(
+            "log-project--session",
+            &mut mapping,
+            &registry,
+            Some("/home/user/project"),
+            &cwd_map,
+            None,
+        );
+        assert!(result.starts_with("pid-"));
+    }
+
+    #[test]
+    fn test_resolve_model_hint_fallback_no_cwd() {
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "claude"));
+        registry.insert_for_test(make_agent_with_model("pid-200", "gemini"));
+        let mut mapping = std::collections::HashMap::new();
+        let cwd_map = std::collections::HashMap::new();
+
+        // Gemini log with no CWD should match pid-200 via model_hint
+        let result = resolve_agent_id(
+            "log-project--gemini-session",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            Some("gemini"),
+        );
+        assert_eq!(
+            result, "pid-200",
+            "Gemini log without CWD should match Gemini agent via model_hint fallback"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_hint_fallback_skips_mapped_agents() {
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "gemini"));
+        registry.insert_for_test(make_agent_with_model("pid-200", "gemini"));
+        let mut mapping = std::collections::HashMap::new();
+        let cwd_map = std::collections::HashMap::new();
+
+        // First session claims pid-100
+        let result1 = resolve_agent_id(
+            "log-project--session1",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            Some("gemini"),
+        );
+        assert_eq!(result1, "pid-100");
+
+        // Second session should get pid-200 (pid-100 is already mapped)
+        let result2 = resolve_agent_id(
+            "log-project--session2",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            Some("gemini"),
+        );
+        assert_eq!(result2, "pid-200");
+    }
+
+    #[test]
+    fn test_resolve_model_hint_fallback_no_match_without_hint() {
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "gemini"));
+        let mut mapping = std::collections::HashMap::new();
+        let cwd_map = std::collections::HashMap::new();
+
+        // No CWD and no model_hint — should not match
+        let result = resolve_agent_id(
+            "log-project--session",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            None,
+        );
+        assert_eq!(result, "log-project--session");
+    }
+
+    #[test]
+    fn test_resolve_model_hint_fallback_no_matching_model() {
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "claude"));
+        let mut mapping = std::collections::HashMap::new();
+        let cwd_map = std::collections::HashMap::new();
+
+        // Gemini hint but only Claude agents — no match
+        let result = resolve_agent_id(
+            "log-project--session",
+            &mut mapping,
+            &registry,
+            None,
+            &cwd_map,
+            Some("gemini"),
+        );
+        assert_eq!(result, "log-project--session");
+    }
+
+    #[test]
+    fn test_resolve_cwd_match_rejects_wrong_model() {
+        // Scenario: Claude log + Gemini process with matching CWD.
+        // The Claude log must NOT match the Gemini process even if it's
+        // the only CWD candidate (model mismatch should cause fall-through).
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "gemini"));
+        let mut mapping = std::collections::HashMap::new();
+        let mut cwd_map = std::collections::HashMap::new();
+        cwd_map.insert("pid-100".to_string(), "/home/user/project".to_string());
+
+        let result = resolve_agent_id(
+            "log-project--claude-session",
+            &mut mapping,
+            &registry,
+            Some("/home/user/project"),
+            &cwd_map,
+            Some("claude"),
+        );
+        assert_eq!(
+            result, "log-project--claude-session",
+            "Claude log must not match Gemini process even with same CWD"
+        );
+    }
+
+    #[test]
+    fn test_resolve_cwd_match_without_hint_still_matches_any_model() {
+        // When no model_hint is provided, CWD match should work regardless of model.
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "gemini"));
+        let mut mapping = std::collections::HashMap::new();
+        let mut cwd_map = std::collections::HashMap::new();
+        cwd_map.insert("pid-100".to_string(), "/home/user/project".to_string());
+
+        let result = resolve_agent_id(
+            "log-project--session",
+            &mut mapping,
+            &registry,
+            Some("/home/user/project"),
+            &cwd_map,
+            None,
+        );
+        assert_eq!(
+            result, "pid-100",
+            "Without model_hint, CWD match should work for any model"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_hint_fallback_when_agent_has_no_cwd() {
+        // Scenario: log has CWD but the agent process was registered without CWD
+        // (sysinfo couldn't read it). Model-hint fallback should still match
+        // agents that have no CWD entry in the map.
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-3485", ""));
+        let mut mapping = std::collections::HashMap::new();
+        let cwd_map = std::collections::HashMap::new(); // pid-3485 has no CWD
+
+        let result = resolve_agent_id(
+            "log--project--session",
+            &mut mapping,
+            &registry,
+            Some("/home/user/project"), // log has CWD
+            &cwd_map,
+            Some("claude"), // model hint
+        );
+        assert_eq!(
+            result, "pid-3485",
+            "Agent without CWD should be matched via model-hint fallback even when log has CWD"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_hint_fallback_skips_agents_with_cwd() {
+        // When log_cwd is present, model-hint fallback should only consider
+        // agents WITHOUT CWD (those with CWD should have been matched in step 3).
+        let mut registry = AgentRegistry::new();
+        registry.insert_for_test(make_agent_with_model("pid-100", "claude"));
+        registry.insert_for_test(make_agent_with_model("pid-200", "claude"));
+        let mut mapping = std::collections::HashMap::new();
+        let mut cwd_map = std::collections::HashMap::new();
+        cwd_map.insert("pid-100".to_string(), "/other/project".to_string());
+        // pid-200 has no CWD
+
+        let result = resolve_agent_id(
+            "log--project--session",
+            &mut mapping,
+            &registry,
+            Some("/home/user/project"),
+            &cwd_map,
+            Some("claude"),
+        );
+        assert_eq!(
+            result, "pid-200",
+            "Should match pid-200 (no CWD) not pid-100 (has CWD but different path)"
         );
     }
 }

@@ -1,5 +1,5 @@
 // User settings store — loads from Tauri backend, saves on change with debounce
-// Frontend-only settings (language, showPrompts, debugMode) persist via localStorage.
+// Frontend-only settings (language, showPrompts) persist via localStorage.
 
 import { TAURI_COMMANDS } from "$lib/types/index";
 import type { Locale } from "$lib/i18n/translations";
@@ -8,7 +8,6 @@ const LOCAL_STORAGE_KEY = "officeai-settings";
 const FRONTEND_ONLY_KEYS: ReadonlySet<keyof Settings> = new Set([
   "language",
   "showPrompts",
-  "debugMode",
 ]);
 
 // ---------------------------------------------------------------------------

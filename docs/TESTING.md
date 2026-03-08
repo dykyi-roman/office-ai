@@ -18,10 +18,10 @@
 
 | Category | Tests | Files | Framework |
 |---|---|---|---|
-| **TypeScript (unit)** | ~366 | 20 | Vitest (Node env) |
+| **TypeScript (unit)** | ~364 | 20 | Vitest (Node env) |
 | **TypeScript (integration)** | 47 | 3 | Vitest (Node env) |
-| **Rust** | 179 | 13 | cargo test |
-| **Total** | **~592** | **36** | — |
+| **Rust** | 261 | 15 | cargo test |
+| **Total** | **~672** | **38** | — |
 
 ---
 
@@ -107,18 +107,20 @@ Embedded in each `.rs` file within `#[cfg(test)] mod tests`:
 
 | Module | Tests | What It Tests |
 |---|---|---|
-| `interceptor/claude_code_parser` | 49 | JSONL parsing → ParsedEvent, type mapping, token extraction, XML filtering, `ClaudeCodeParser` trait impl |
-| `interceptor/state_classifier` | 27 | FSM transitions, 300ms debounce (self-transitions only), auto-idle, stale resolution |
-| `interceptor/parser_registry` | 8 | Routing: explicit bindings, longest prefix match, auto-detection fallback, empty registry |
-| `interceptor/generic_cli_parser` | 12 | Generic CLI output classification, tool-use/error/complete detection, case-insensitive matching |
+| `interceptor/claude_code_parser` | 60 | JSONL parsing → ParsedEvent, type mapping, token extraction, XML filtering, `ClaudeCodeParser` trait impl, `path_to_agent_id` |
+| `interceptor/state_classifier` | 31 | FSM transitions, 300ms debounce (self-transitions only), auto-idle, stale resolution |
+| `interceptor/gemini_cli_parser` | 29 | Gemini JSON message parsing, token extraction, `GeminiCliParser` trait impl, `path_to_agent_id`, `resolve_log_dirs` |
+| `ipc/commands` | 23 | Tauri commands (get_all_agents, get_agent, get_stats), apply_config, OS info |
+| `lib.rs` | 21 | Log-to-agent resolution, cwd matching, cached mapping, stale cleanup, subdirectory matching |
+| `discovery/process_scanner` | 18 | Process filtering, TTY check, blocklist, model inference, agent name derivation, parent-child dedup |
 | `models/agent_state` | 17 | `Tier::from_model()` for Claude, Gemini, GPT, O-series, serialization |
-| `ipc/commands` | 16 | Tauri commands (get_all_agents, get_agent, get_stats), apply_config, OS info |
-| `lib.rs` | 15 | Log-to-agent resolution, cwd matching, cached mapping, stale cleanup, subdirectory matching |
-| `discovery/process_scanner` | 10 | Process filtering, TTY check, blocklist |
-| `discovery/agent_registry` | 6 | Register/update/remove, maxAgents limit |
-| `discovery/log_watcher` | 6 | Incremental reading, file rotation |
+| `discovery/log_reader` | 16 | `JsonlReader` + `JsonArrayReader`: incremental reading, seeding, file rotation, `can_handle` |
+| `interceptor/generic_cli_parser` | 12 | Generic CLI output classification, tool-use/error/complete detection, case-insensitive matching |
+| `interceptor/parser_registry` | 10 | Routing: explicit bindings, longest prefix match, auto-detection fallback, `path_to_agent_id` delegation |
+| `discovery/agent_registry` | 8 | Register/update/remove, maxAgents limit, active_count excluding Error |
 | `ipc/events` | 6 | Event payloads, badge count, camelCase serialization, event name constants |
 | `logger` | 5 | `tail_lines` utility (boundary cases, empty content) |
+| `discovery/log_watcher` | 3 | File collection, reader filtering, seed behavior |
 | `models/bug_report` | 2 | BugReport/OsInfo camelCase serialization |
 
 ### Reserved Directories
@@ -212,28 +214,30 @@ The `$lib` → `./src/lib` alias is available in tests (configured in `vite.conf
 ### Test Distribution by Module
 
 ```
-interceptor/        96 tests (52%)
-├── claude_code_parser   49
-├── state_classifier     27
+interceptor/       142 tests (54%)
+├── claude_code_parser   60
+├── state_classifier     31
+├── gemini_cli_parser    29
 ├── generic_cli_parser   12
-└── parser_registry       8
+└── parser_registry      10
 
-ipc/                22 tests (12%)
-├── commands             16
+discovery/          45 tests (17%)
+├── process_scanner      18
+├── log_reader           16
+├── agent_registry        8
+└── log_watcher           3
+
+ipc/                29 tests (11%)
+├── commands             23
 └── events                6
 
-models/             19 tests (11%)
+core/               26 tests (10%)
+├── lib.rs               21
+└── logger                5
+
+models/             19 tests (7%)
 ├── agent_state          17
 └── bug_report            2
-
-discovery/          22 tests (12%)
-├── process_scanner      10
-├── agent_registry        6
-└── log_watcher           6
-
-core/               20 tests (11%)
-├── lib.rs               15
-└── logger                5
 ```
 
 ### Modules Without Tests

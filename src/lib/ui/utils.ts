@@ -67,14 +67,14 @@ export function statusColor(status: Status): string {
  */
 export function tierColor(tier: Tier): string {
   switch (tier) {
-    case "flagship":
+    case "expert":
       return "#ffd700";
     case "senior":
       return "#4a9eff";
     case "middle":
       return "#22c55e";
     case "junior":
-      return "#f97316";
+      return "#9ca3af";
   }
 }
 

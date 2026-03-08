@@ -41,6 +41,7 @@ type AgentLocationState = "idle_zone" | "desk" | "walking_to_desk" | "walking_to
 
 const WORK_STATUSES: ReadonlySet<Status> = new Set(["thinking", "responding", "tool_use"]);
 const IDLE_STATUSES: ReadonlySet<Status> = new Set(["idle", "collaboration"]);
+const LEAVE_DESK_STATUSES: ReadonlySet<Status> = new Set(["error"]);
 
 /** Pixel offsets so agents at the same tile don't visually overlap.
  *  Each slot gets a unique isometric offset (±24px horizontal, ±12px vertical). */
@@ -324,9 +325,9 @@ export class OfficeScene {
   // ---------------------------------------------------------------------------
 
   private async loadAssets(): Promise<void> {
-    const tiers: Tier[] = ["flagship", "senior", "middle", "junior"];
+    const tiers: Tier[] = ["expert", "senior", "middle", "junior"];
     const tierFilenames: Record<Tier, string> = {
-      flagship: "teamlead",
+      expert: "expert",
       senior: "senior",
       middle: "middle",
       junior: "junior",
@@ -732,8 +733,9 @@ export class OfficeScene {
     if ((location === "idle_zone" || location === "walking_to_idle") && isWork) {
       // Agent received a task — move from idle zone to desk
       this.moveAgentToDesk(agent.id, sprite, agent);
-    } else if ((location === "desk" || location === "walking_to_desk") && isIdle) {
-      // Agent finished task — move from desk (or mid-walk) to idle zone
+    } else if ((location === "desk" || location === "walking_to_desk") && (isIdle || LEAVE_DESK_STATUSES.has(agent.status))) {
+      // Agent finished task or encountered error — move from desk to idle zone
+      sprite.update(agent);
       this.moveAgentToIdleZone(agent.id, sprite);
     } else {
       // Visual-only update (already at desk working, or transitional state)

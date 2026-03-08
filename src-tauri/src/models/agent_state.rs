@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
-    Flagship,
+    Expert,
     Senior,
     Middle,
     Junior,
@@ -18,7 +18,7 @@ impl Tier {
     /// Infer tier from model name string.
     ///
     /// Supports Claude, Gemini, GPT, and O-series model families:
-    /// - Flagship: opus, ultra, gpt-4o (not mini), o1-* (not mini), o3-* (not mini)
+    /// - Expert: opus, ultra, gpt-4o (not mini), o1-* (not mini), o3-* (not mini)
     /// - Senior: sonnet, pro, gpt-4 (not gpt-4o)
     /// - Junior: haiku, nano, flash, gpt-3.5, mini
     /// - Middle: everything else
@@ -36,14 +36,14 @@ impl Tier {
             return Tier::Junior;
         }
 
-        // Flagship tier
+        // Expert tier
         if m.contains("opus")
             || m.contains("ultra")
             || m.contains("gpt-4o")
             || m.starts_with("o1")
             || m.starts_with("o3")
         {
-            return Tier::Flagship;
+            return Tier::Expert;
         }
 
         // Senior tier
@@ -235,8 +235,8 @@ mod tests {
 
     #[test]
     fn test_tier_from_model_opus() {
-        assert_eq!(Tier::from_model("claude-opus-4"), Tier::Flagship);
-        assert_eq!(Tier::from_model("claude-opus-4-turbo"), Tier::Flagship);
+        assert_eq!(Tier::from_model("claude-opus-4"), Tier::Expert);
+        assert_eq!(Tier::from_model("claude-opus-4-turbo"), Tier::Expert);
     }
 
     #[test]
@@ -254,18 +254,20 @@ mod tests {
     fn test_tier_from_model_unknown_defaults_to_middle() {
         assert_eq!(Tier::from_model("claude"), Tier::Middle);
         assert_eq!(Tier::from_model("some-custom-model"), Tier::Middle);
+        // "unknown" from infer_initial_model() must also map to Middle
+        assert_eq!(Tier::from_model("unknown"), Tier::Middle);
     }
 
     #[test]
     fn test_tier_from_model_case_insensitive() {
-        assert_eq!(Tier::from_model("Claude-Opus-4"), Tier::Flagship);
+        assert_eq!(Tier::from_model("Claude-Opus-4"), Tier::Expert);
         assert_eq!(Tier::from_model("SONNET"), Tier::Senior);
     }
 
     // Gemini model family
     #[test]
     fn test_tier_from_model_gemini_ultra() {
-        assert_eq!(Tier::from_model("gemini-ultra"), Tier::Flagship);
+        assert_eq!(Tier::from_model("gemini-ultra"), Tier::Expert);
     }
 
     #[test]
@@ -288,8 +290,8 @@ mod tests {
     // GPT model family
     #[test]
     fn test_tier_from_model_gpt4o() {
-        assert_eq!(Tier::from_model("gpt-4o"), Tier::Flagship);
-        assert_eq!(Tier::from_model("gpt-4o-2024-05-13"), Tier::Flagship);
+        assert_eq!(Tier::from_model("gpt-4o"), Tier::Expert);
+        assert_eq!(Tier::from_model("gpt-4o-2024-05-13"), Tier::Expert);
     }
 
     #[test]
@@ -311,8 +313,8 @@ mod tests {
     // O-series models
     #[test]
     fn test_tier_from_model_o1() {
-        assert_eq!(Tier::from_model("o1"), Tier::Flagship);
-        assert_eq!(Tier::from_model("o1-preview"), Tier::Flagship);
+        assert_eq!(Tier::from_model("o1"), Tier::Expert);
+        assert_eq!(Tier::from_model("o1-preview"), Tier::Expert);
     }
 
     #[test]
@@ -322,7 +324,7 @@ mod tests {
 
     #[test]
     fn test_tier_from_model_o3() {
-        assert_eq!(Tier::from_model("o3"), Tier::Flagship);
+        assert_eq!(Tier::from_model("o3"), Tier::Expert);
     }
 
     #[test]

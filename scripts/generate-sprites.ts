@@ -100,7 +100,7 @@ const SHEET_H = SHEET_ROWS * FRAME_H; // 256 (4 rows for 56 frames)
 // ---------------------------------------------------------------------------
 
 const TIERS: Record<string, TierStyle> = {
-  teamlead: {
+  expert: {
     bodyColor: '#1a2744',
     accentColor: '#c9a227',
     skinColor: '#f4c2a1',

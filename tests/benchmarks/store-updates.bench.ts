@@ -71,7 +71,7 @@ const agentPool1 = [makeAgent("a1", { status: "thinking", tokensIn: 5000 })];
 const agentPool10 = Array.from({ length: 10 }, (_, i) =>
   makeAgent(`a${i}`, {
     status: i % 2 === 0 ? "thinking" : "idle",
-    tier: (["flagship", "senior", "middle", "junior"] as Tier[])[i % 4],
+    tier: (["expert", "senior", "middle", "junior"] as Tier[])[i % 4],
     tokensIn: (i + 1) * 1000,
     tokensOut: (i + 1) * 500,
   }),
@@ -80,7 +80,7 @@ const agentPool10 = Array.from({ length: 10 }, (_, i) =>
 const agentPool20 = Array.from({ length: 20 }, (_, i) =>
   makeAgent(`b${i}`, {
     status: (["idle", "thinking", "responding", "tool_use"] as Status[])[i % 4],
-    tier: (["flagship", "senior", "middle", "junior"] as Tier[])[i % 4],
+    tier: (["expert", "senior", "middle", "junior"] as Tier[])[i % 4],
     tokensIn: (i + 1) * 2000,
     tokensOut: (i + 1) * 800,
   }),

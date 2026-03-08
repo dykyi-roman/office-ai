@@ -65,7 +65,7 @@ clippy: ## Run Rust linter (warnings as errors)
 
 # ─── Assets ───────────────────────────────────────────────────────────────────
 
-assets: ## Generate all visual assets (sprites + tiles + effects)
+assets: ## Generate all visual assets (sprites + tiles)
 	npm run generate:all
 
 sprites: ## Generate agent spritesheets only

@@ -1,6 +1,6 @@
 // Agent types — source of truth for Rust mirror in src-tauri/src/models/agent_state.rs
 
-export type Tier = "flagship" | "senior" | "middle" | "junior";
+export type Tier = "expert" | "senior" | "middle" | "junior";
 
 export type Status =
   | "idle"

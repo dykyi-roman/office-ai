@@ -271,21 +271,21 @@ describe("AgentSprite — walk speed calculation", () => {
 
 describe("AgentSprite — tier dot color mapping", () => {
   const TIER_DOT_COLOR: Record<string, number> = {
-    flagship: 0xffd700,
+    expert: 0xffd700,
     senior: 0x4a90e2,
     middle: 0x5cb85c,
     junior: 0xaaaaaa,
   };
 
   const TIER_DOT_STROKE: Record<string, number> = {
-    flagship: 0xb89b00,
+    expert: 0xb89b00,
     senior: 0x2d5a8e,
     middle: 0x3a7a3a,
     junior: 0x777777,
   };
 
-  it("flagship tier uses gold dot color", () => {
-    expect(TIER_DOT_COLOR["flagship"]).toBe(0xffd700);
+  it("expert tier uses gold dot color", () => {
+    expect(TIER_DOT_COLOR["expert"]).toBe(0xffd700);
   });
 
   it("junior tier uses grey dot color", () => {
@@ -293,7 +293,7 @@ describe("AgentSprite — tier dot color mapping", () => {
   });
 
   it("all tier levels have assigned dot fill and stroke colors", () => {
-    const tiers = ["flagship", "senior", "middle", "junior"];
+    const tiers = ["expert", "senior", "middle", "junior"];
     for (const tier of tiers) {
       expect(typeof TIER_DOT_COLOR[tier]).toBe("number");
       expect(typeof TIER_DOT_STROKE[tier]).toBe("number");
@@ -301,7 +301,7 @@ describe("AgentSprite — tier dot color mapping", () => {
   });
 
   it("stroke colors are darker than fill colors", () => {
-    const tiers = ["flagship", "senior", "middle", "junior"];
+    const tiers = ["expert", "senior", "middle", "junior"];
     for (const tier of tiers) {
       expect(TIER_DOT_STROKE[tier]).toBeLessThan(TIER_DOT_COLOR[tier]);
     }

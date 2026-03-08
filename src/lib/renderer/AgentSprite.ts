@@ -24,20 +24,20 @@ const WALK_SPEED_PX = 120;
 /** All agents render with the same visual tier (green hoodie) regardless of actual tier */
 const VISUAL_TIER: Tier = "middle";
 
-/** Thinking dot fill colour per tier */
+/** Thinking dot fill colour per tier — must match tierColor() in ui/utils.ts */
 const TIER_DOT_COLOR: Record<Tier, number> = {
-  flagship: 0xffd700, // gold
-  senior: 0x4a90e2,   // blue
-  middle: 0x5cb85c,   // green
-  junior: 0xaaaaaa,   // grey
+  expert: 0xffd700, // gold
+  senior: 0x4a9eff,   // blue
+  middle: 0x22c55e,   // green
+  junior: 0x9ca3af,   // grey
 };
 
 /** Thinking dot stroke (darker variant) per tier */
 const TIER_DOT_STROKE: Record<Tier, number> = {
-  flagship: 0xb89b00,
-  senior: 0x2d5a8e,
-  middle: 0x3a7a3a,
-  junior: 0x777777,
+  expert: 0xb89b00,
+  senior: 0x2d6fbf,
+  middle: 0x1a9a48,
+  junior: 0x6b7280,
 };
 
 /** Name label text style */

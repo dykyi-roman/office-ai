@@ -56,6 +56,59 @@ impl ParserRegistry {
         self.bindings.push(DirectoryBinding { path, parser_index });
     }
 
+    /// Derive agent ID from a log file path, delegating to the matched parser.
+    /// Uses the same routing logic as `parse_line`: binding → auto-detect → default.
+    pub fn path_to_agent_id(&self, path: &Path) -> String {
+        // 1. Explicit binding
+        if let Some(parser) = self.find_by_binding(path) {
+            return parser.path_to_agent_id(path);
+        }
+
+        // 2. Auto-detection — read first line for can_parse()
+        let first_line = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|content| content.lines().next().map(|l| l.to_string()))
+            .unwrap_or_default();
+
+        for parser in &self.parsers {
+            if parser.can_parse(path, &first_line) {
+                return parser.path_to_agent_id(path);
+            }
+        }
+
+        // 3. Fallback: default implementation
+        let parent = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let stem = path
+            .file_stem()
+            .map(|s| {
+                let s = s.to_string_lossy();
+                if s.len() > 8 {
+                    s[..8].to_string()
+                } else {
+                    s.to_string()
+                }
+            })
+            .unwrap_or_default();
+        if stem.is_empty() {
+            format!("log-{parent}")
+        } else {
+            format!("log-{parent}--{stem}")
+        }
+    }
+
+    /// Get the model hint for a log file path (e.g. "claude", "gemini").
+    /// Used by resolve_agent_id to prefer matching agents by model type.
+    pub fn model_hint_for_path(&self, path: &Path) -> Option<String> {
+        if let Some(parser) = self.find_by_binding(path) {
+            return Some(parser.model_hint().to_string());
+        }
+        None
+    }
+
     /// Parse a log line, routing to the correct parser.
     ///
     /// 1. Check explicit directory bindings (longest prefix match)
@@ -92,6 +145,7 @@ impl ParserRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::discovery::log_reader::LogFileReader;
     use crate::models::Status;
 
     /// A simple test parser that always returns Thinking status.
@@ -102,6 +156,10 @@ mod tests {
 
     impl AgentLogParser for TestParser {
         fn name(&self) -> &str {
+            &self.parser_name
+        }
+
+        fn model_hint(&self) -> &str {
             &self.parser_name
         }
 
@@ -125,6 +183,14 @@ mod tests {
                 cwd: None,
             })
         }
+
+        fn log_roots(&self) -> Vec<PathBuf> {
+            vec![]
+        }
+
+        fn create_reader(&self) -> Box<dyn LogFileReader> {
+            Box::new(crate::discovery::log_reader::JsonlReader::new())
+        }
     }
 
     fn make_test_parser(name: &str, prefix: &str) -> Arc<dyn AgentLogParser> {
@@ -141,6 +207,10 @@ mod tests {
 
     impl AgentLogParser for BindingOnlyParser {
         fn name(&self) -> &str {
+            &self.parser_name
+        }
+
+        fn model_hint(&self) -> &str {
             &self.parser_name
         }
 
@@ -163,6 +233,14 @@ mod tests {
                 timestamp: "2026-01-01T00:00:00Z".to_string(),
                 cwd: None,
             })
+        }
+
+        fn log_roots(&self) -> Vec<PathBuf> {
+            vec![]
+        }
+
+        fn create_reader(&self) -> Box<dyn LogFileReader> {
+            Box::new(crate::discovery::log_reader::JsonlReader::new())
         }
     }
 
@@ -252,6 +330,26 @@ mod tests {
         // Partial directory name — should NOT match (Path::starts_with is component-based)
         let partial = Path::new("/home/user/.claude-backup/log.jsonl");
         assert!(reg.parse_line(partial, "log line").is_none());
+    }
+
+    #[test]
+    fn test_path_to_agent_id_delegates_to_bound_parser() {
+        let mut reg = ParserRegistry::new();
+        let idx = reg.register_parser(make_test_parser("claude", ".claude"));
+        reg.bind_directory(PathBuf::from("/home/user/.claude/projects"), idx);
+
+        let path = Path::new("/home/user/.claude/projects/myproj/abcdefgh-1234.jsonl");
+        let id = reg.path_to_agent_id(path);
+        // Delegates to TestParser which uses default trait impl (8-char stem prefix)
+        assert_eq!(id, "log-myproj--abcdefgh");
+    }
+
+    #[test]
+    fn test_path_to_agent_id_fallback_no_parser() {
+        let reg = ParserRegistry::new();
+        let path = Path::new("/some/unknown/path/file12345678.jsonl");
+        let id = reg.path_to_agent_id(path);
+        assert_eq!(id, "log-path--file1234");
     }
 
     #[test]

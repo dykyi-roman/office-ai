@@ -63,6 +63,16 @@ macro_rules! app_log {
     };
 }
 
+/// Log only when debug_mode is enabled. Used for verbose diagnostic messages.
+#[macro_export]
+macro_rules! app_log_debug {
+    ($debug:expr, $cat:expr, $($arg:tt)*) => {
+        if $debug {
+            $crate::logger::log(&format!("[{}] {}", $cat, format_args!($($arg)*)))
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

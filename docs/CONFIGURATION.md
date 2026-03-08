@@ -50,7 +50,7 @@ Settings are divided into three tabs:
 
 <img src="../images/settings_discovery.png" alt="Settings — Discovery" width="420" />
 
-**Scan interval** — OS process scanning interval via `sysinfo` (slider, 1s–10s). Every N seconds the Process Scanner: enumerates all processes, filters by patterns (`["claude", "node.*claude"]`), applies blocklist, version filter and TTY check, registers discovered agents in `AgentRegistry`. Lower values detect new agents faster but increase CPU usage. On the frontend the value is stored in **seconds**; when sent to the backend it is converted to milliseconds (`scanInterval * 1000` → `scan_interval_ms`). Storage: Backend. Default: **2s**.
+**Scan interval** — OS process scanning interval via `sysinfo` (slider, 1s–10s). Every N seconds the Process Scanner: enumerates all processes, filters by patterns (`["claude", "node.*claude", "gemini", "node.*gemini"]`), applies blocklist, version filter and TTY check, registers discovered agents in `AgentRegistry`. Lower values detect new agents faster but increase CPU usage. On the frontend the value is stored in **seconds**; when sent to the backend it is converted to milliseconds (`scanInterval * 1000` → `scan_interval_ms`). Storage: Backend. Default: **2s**.
 
 **Custom log paths** — additional directories for searching agent JSONL logs (textarea, one path per line). Added to the standard path `~/.claude/projects/`. On the frontend stored as `string` (multiline text), on the backend as `Vec<PathBuf>`. Storage: Backend. Default: `""` (empty string).
 
@@ -96,23 +96,37 @@ These settings are stored in `config.toml` but **have no UI**. They are edited m
 
 ### 2.1. Log Roots
 
-**Key:** `logRoots` | **Default:** `["~/.claude/projects"]`
+**Key:** `logRoots` | **Default:** `["~/.claude/projects", "~/.gemini/tmp"]`
 
-Root directories for searching agent logs. Log Watcher expands each root one level deep into subdirectories and polls them for `.jsonl` files. To add a new AI agent, simply add its root log directory (e.g. `"~/.gemini/sessions"`).
+Root directories for searching agent logs. Log Watcher expands each root one level deep into subdirectories and polls them for `.jsonl` files (Claude Code) and `session-*.json` files (Gemini CLI). If a subdirectory contains a `chats/` folder, the watcher descends into it (handles Gemini's `tmp/<project>/chats/` layout). To add a new AI agent, simply add its root log directory.
 
-### 2.2. Idle Timeout
+### 2.2. Agent Process Patterns
+
+**Key:** `agentProcessPatterns` | **Default:** `["claude", "node.*claude", "gemini", "node.*gemini"]`
+
+Regex patterns for detecting AI agent processes by name or full command line. The process scanner matches each running process against these patterns. To support a new AI CLI agent, add its name or a regex matching its cmdline.
+
+**Config migration:** On startup, `AppConfig::ensure_defaults()` checks that all default patterns and log roots are present in the saved config. If patterns were added in a newer version (e.g., Gemini support), they are automatically merged into the saved config without removing user-customized patterns.
+
+### 2.6. Debug Mode
+
+**Key:** `debug_mode` | **Type:** `bool` | **Default:** `false`
+
+Enables verbose diagnostic logging in the process scanner and log consumer. When enabled, filtered-out processes and correlation details are logged under `[SCANNER]` and `[LOG_MATCH]` categories. Useful for troubleshooting agent detection issues.
+
+### 2.3. Idle Timeout
 
 **Key:** `idle_timeout_ms` | **Type:** `u64` (ms) | **Default:** `3000`
 
 Timeout for auto-transitioning an agent to idle after `TaskComplete`.
 
-### 2.3. State Debounce
+### 2.4. State Debounce
 
 **Key:** `state_debounce_ms` | **Type:** `u64` (ms) | **Default:** `300`
 
 FSM state classifier debounce. Applied only to self-transitions (same status repeated).
 
-### 2.4. Safety Timeouts
+### 2.5. Safety Timeouts
 
 **Keys:** `work_timeout_ms` (default: `120000`), `responding_timeout_ms` (default: `30000`)
 
@@ -131,7 +145,7 @@ Internal auto-idle timeouts for the StateClassifier FSM. See [ARCHITECTURE.md](.
 3. A **debounce timer** starts (400ms)
 4. When the timer expires → IPC call `set_config(key, String(value))`
 5. Rust writes the value to `AppConfig` in memory
-6. Rust persists `AppConfig` to `~/.config/office-ai/config.toml`
+6. Rust persists `AppConfig` to config dir (`~/Library/Application Support/office-ai/config.toml` on macOS, `~/.config/office-ai/config.toml` on Linux)
 
 **Frontend-only settings** (language, showPrompts, debugMode):
 

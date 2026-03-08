@@ -178,8 +178,8 @@ describe("statusColor — specific values", () => {
 // ---------------------------------------------------------------------------
 
 describe("tierColor — all tiers", () => {
-  it("flagship returns gold (#ffd700)", () => {
-    expect(tierColor("flagship")).toBe("#ffd700");
+  it("expert returns gold (#ffd700)", () => {
+    expect(tierColor("expert")).toBe("#ffd700");
   });
 
   it("senior returns blue (#4a9eff)", () => {
@@ -190,12 +190,12 @@ describe("tierColor — all tiers", () => {
     expect(tierColor("middle")).toBe("#22c55e");
   });
 
-  it("junior returns orange (#f97316)", () => {
-    expect(tierColor("junior")).toBe("#f97316");
+  it("junior returns grey (#9ca3af)", () => {
+    expect(tierColor("junior")).toBe("#9ca3af");
   });
 
   it("all tier colors are valid hex CSS strings", () => {
-    const tiers = ["flagship", "senior", "middle", "junior"] as const;
+    const tiers = ["expert", "senior", "middle", "junior"] as const;
     for (const tier of tiers) {
       expect(tierColor(tier)).toMatch(/^#[0-9a-f]{6}$/i);
     }

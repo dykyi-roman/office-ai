@@ -94,7 +94,7 @@ const VALID_TRANSITIONS: Readonly<Record<Status, ReadonlySet<Status>>> = {
     "offline",
   ]),
   task_complete: new Set<Status>(["idle", "offline"]),
-  error: new Set<Status>(["idle", "offline"]),
+  error: new Set<Status>(["idle", "walking_to_desk", "offline"]),
   offline: new Set<Status>(["idle"]),
 };
 
@@ -279,13 +279,18 @@ export class AnimationController {
     // Show thinking indicator for all work states (thinking, responding, tool_use).
     // Always re-create: enterAction/exitAction may call clearStatusIndicator()
     // which destroys dots, so we must restore them after every work transition.
+    // Skip hiding for states that show their own indicator (error, task_complete)
+    // to avoid clearStatusIndicator() destroying the icon set by enterAction.
     const WORK_STATES: ReadonlySet<Status> = new Set<Status>(["thinking", "responding", "tool_use"]);
+    const HAS_OWN_INDICATOR: ReadonlySet<Status> = new Set<Status>(["error", "task_complete"]);
     if (WORK_STATES.has(next)) {
       this.thinkingVisible = true;
       this.sprite.showThinkingIndicator();
-    } else if (this.thinkingVisible) {
+    } else if (this.thinkingVisible && !HAS_OWN_INDICATOR.has(next)) {
       this.thinkingVisible = false;
       this.sprite.hideThinkingIndicator();
+    } else {
+      this.thinkingVisible = false;
     }
 
     // Schedule auto-transition if defined

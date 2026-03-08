@@ -16,8 +16,7 @@
     "test:e2e": "playwright test",
     "generate:sprites": "npx tsx scripts/generate-sprites.ts",
     "generate:tiles": "npx tsx scripts/generate-tiles.ts",
-    "generate:effects": "npx tsx scripts/generate-effects.ts",
-    "generate:all": "npm run generate:sprites && npm run generate:tiles && npm run generate:effects"
+    "generate:all": "npm run generate:sprites && npm run generate:tiles"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",

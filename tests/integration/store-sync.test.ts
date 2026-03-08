@@ -108,12 +108,12 @@ describe("store-sync: agent:found → derived values update", () => {
 
   it("adding multiple agents propagates to grouped-by-tier", () => {
     let state = emptyStore();
-    state = addAgent(state, makeAgent({ id: "a1", tier: "flagship" }));
-    state = addAgent(state, makeAgent({ id: "a2", tier: "flagship" }));
+    state = addAgent(state, makeAgent({ id: "a1", tier: "expert" }));
+    state = addAgent(state, makeAgent({ id: "a2", tier: "expert" }));
     state = addAgent(state, makeAgent({ id: "a3", tier: "junior" }));
 
     const grouped = computeAgentsByTier(state);
-    expect(grouped.get("flagship")).toHaveLength(2);
+    expect(grouped.get("expert")).toHaveLength(2);
     expect(grouped.get("junior")).toHaveLength(1);
   });
 

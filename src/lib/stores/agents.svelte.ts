@@ -19,7 +19,7 @@ const MOCK_AGENTS: AgentState[] = [
     pid: 12345,
     name: "Claude Opus",
     model: "claude-opus-4-6",
-    tier: "flagship",
+    tier: "expert",
     role: "Architect",
     status: "thinking",
     idleLocation: "desk",

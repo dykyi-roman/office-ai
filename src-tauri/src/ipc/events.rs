@@ -84,7 +84,7 @@ mod tests {
             pid: Some(42),
             name: "claude".to_string(),
             model: "claude-opus-4".to_string(),
-            tier: Tier::Flagship,
+            tier: Tier::Expert,
             role: "agent".to_string(),
             status: Status::Thinking,
             idle_location: IdleLocation::Desk,
