@@ -73,7 +73,7 @@ Platform-specific icon files for the OfficeAI desktop application. Referenced in
 
 **`main.rs`** — Binary entry point (6 lines). Calls `office_ai_lib::run()`. The `windows_subsystem = "windows"` attribute suppresses the console window on Windows in release builds.
 
-**`lib.rs`** — Core orchestrator (~870 lines). Initializes the logger, loads config from TOML, creates the shared `AgentRegistry`, builds the `ParserRegistry` with `ClaudeCodeParser`, and wires 5 concurrent Tokio tasks via `mpsc` channels: Process Scanner, Log Watcher, Scanner Consumer, Log Consumer, and Auto-Idle Consumer. Also contains `path_to_agent_id()` (derives log IDs from file paths) and `resolve_agent_id()` (cwd-based agent-process correlation with 30s stale mapping expiry). Includes 15 unit tests.
+**`lib.rs`** — Core orchestrator (~870 lines). Initializes the logger, loads config from TOML, creates the shared `AgentRegistry`, builds the `ParserRegistry` with `ClaudeCodeParser`, `GeminiCliParser`, and `CodexCliParser`, and wires 5 concurrent Tokio tasks via `mpsc` channels: Process Scanner, Log Watcher, Scanner Consumer, Log Consumer, and Auto-Idle Consumer. Also contains `path_to_agent_id()` (derives log IDs from file paths) and `resolve_agent_id()` (cwd-based agent-process correlation with 30s stale mapping expiry). Includes 15 unit tests.
 
 **`logger.rs`** — File-based logger that writes timestamped messages to `logs/app.log`. Truncates the log file on each startup for a fresh session. Provides the `app_log!(category, format, ...)` macro used throughout the codebase, and `read_recent_lines(n)` for bug report collection.
 
@@ -83,7 +83,7 @@ Platform-specific icon files for the OfficeAI desktop application. Referenced in
 
 Discovers running AI agent processes via OS introspection and monitors JSONL log files for activity. Manages the central agent registry that stores all known agents.
 
-**`process_scanner.rs`** — Scans OS processes every 2 seconds. Uses `ps axo pid,ppid,tty,args` as the primary process source (reliable on macOS, even from GUI/Tauri apps). `sysinfo` is used only for supplementary metadata (cwd, start_time). Detects Claude Code and Gemini CLI by matching process names/cmdlines against configurable regex patterns.
+**`process_scanner.rs`** — Scans OS processes every 2 seconds. Uses `ps axo pid,ppid,tty,args` as the primary process source (reliable on macOS, even from GUI/Tauri apps). `sysinfo` is used only for supplementary metadata (cwd, start_time). Detects Claude Code, Gemini CLI, and Codex CLI by matching process names/cmdlines against configurable regex patterns.
 
 Key components:
 - `ScannerEvent` — enum: `AgentFound(AgentState, Option<String>)` | `AgentLost(String)`
@@ -94,7 +94,7 @@ Key components:
 - `scan_processes_with_patterns()` — ps-driven scan with configurable patterns
 - `matches_agent_pattern()` — regex-based process matching
 - `derive_agent_name()` — extracts script name from Node.js cmdlines (e.g. `node .../gemini` → `gemini`)
-- `infer_initial_model()` — determines agent model from name + cmdline via `MODEL_KEYWORDS` lookup table (returns "unknown" for unrecognized processes)
+- `infer_initial_model()` — determines agent model from name + cmdline; checks user-defined `customModelKeywords` (from config) first, then falls back to built-in `MODEL_KEYWORDS` lookup table (returns "unknown" for unrecognized processes)
 - `process_to_agent_state()` — converts `DetectedProcess` → `AgentState`
 
 Filtering layers:
@@ -137,7 +137,9 @@ OS Processes → process_scanner → ScannerEvent → scanner_consumer (lib.rs)
                                                  AgentRegistry
                                                         │
                                                         ▼
-~/.claude/*.jsonl → log_watcher → RawLogLine → log_consumer (lib.rs)
+~/.claude/*.jsonl         ┐
+~/.codex/sessions/*.jsonl ├→ log_watcher → RawLogLine → log_consumer (lib.rs)
+~/.gemini/tmp/*.json      ┘
 ```
 
 **Agent-process correlation:** The scanner registers agents as `pid-{PID}` with their cwd. The log watcher derives IDs as `log-{project-dir}--{session-uuid-prefix}`. The `resolve_agent_id()` function in `lib.rs` bridges the gap using:
@@ -250,7 +252,7 @@ Stale auto-resolve: When a transition is invalid from the current status, the cl
 RawLogLine → ParserRegistry → ParsedEvent → StateClassifier → TransitionResult
                   │                                                   │
                   ▼                                                   ▼
-         ClaudeCodeParser                              Updated / Debounced / Invalid
+  ClaudeCodeParser / GeminiCliParser / CodexCliParser  Updated / Debounced / Invalid
 ```
 
 ### Module: `ipc/` — Tauri IPC Layer
@@ -409,6 +411,7 @@ src-tauri/src/
 │   ├── parser_registry.rs     — parser registry (routing by directory/auto-detect)
 │   ├── claude_code_parser.rs  — Claude Code JSONL parsing + ClaudeCodeParser struct
 │   ├── gemini_cli_parser.rs   — Gemini CLI JSON-array parsing + GeminiCliParser struct
+│   ├── codex_cli_parser.rs    — Codex CLI JSONL parsing + CodexCliParser struct
 │   ├── generic_cli_parser.rs  — heuristic parser for other CLIs
 │   └── state_classifier.rs   — FSM state classifier
 ├── ipc/
@@ -493,7 +496,7 @@ TASK 5: Auto-Idle Consumer
    ```
 
 **Model and tier detection:**
-- At scan time: model inferred via `MODEL_KEYWORDS` table (claude, gemini, aider, cursor, copilot → corresponding model; unrecognized → "unknown"), `tier = Middle` (temporary value)
+- At scan time: model inferred by checking user-defined `customModelKeywords` first, then built-in `MODEL_KEYWORDS` table (claude, gemini, aider, cursor, copilot → corresponding model; unrecognized → "unknown"), `tier = Middle` (temporary value)
 - Real model arrives from JSONL logs via `message.model` field
 - Tier recalculation: `Tier::from_model()` — opus → Expert, sonnet → Senior, haiku → Junior, default (including "unknown") → Middle
 
@@ -502,7 +505,7 @@ TASK 5: Auto-Idle Consumer
 The log watcher is format-agnostic. Each parser creates its own `LogFileReader` (via `create_reader()`), and the watcher delegates to the first reader that `can_handle()` each file.
 
 ```
-readers: Vec<Box<dyn LogFileReader>>  — one per parser (JsonlReader, JsonArrayReader, etc.)
+readers: Vec<Box<dyn LogFileReader>>  — one per parser (JsonlReader, JsonArrayReader, etc.; Codex CLI uses JsonlReader)
 watch_dirs: Vec<PathBuf>              — pre-resolved by parsers via resolve_log_dirs()
 
 Loop (every 500ms):
@@ -614,27 +617,57 @@ tokens_out = output_tokens
 
 **Sub-agents:** Always empty (`sub_agents: vec![]`). Gemini `toolCalls` are regular tool use, not sub-agents — unlike Claude Code's Task/Agent tools. This prevents phantom sub-agents from blocking auto-idle transitions.
 
+#### Codex CLI JSONL Parser
+
+`CodexCliParser` — implementation of `AgentLogParser` for Codex CLI session logs (`~/.codex/sessions/YYYY/MM/DD/<session-uuid>.rollout.jsonl`).
+
+**Stateful parser:** Unlike the stateless Claude Code and Gemini parsers, `CodexCliParser` uses `Mutex`-protected internal state to cache the model name, CWD, token counts, and active function calls across log lines. This is necessary because the Codex JSONL format distributes metadata across separate events rather than repeating it in every line.
+
+**Log format:** JSONL append-only files. Each line is a JSON object with a `type` field. The parser reads new lines incrementally via `JsonlReader` (same as Claude Code).
+
+**Directory traversal:** 3-level YYYY/MM/DD directory structure under `~/.codex/sessions/`. The `resolve_log_dirs()` method uses a today+yesterday optimization — only the directories for the current and previous day are scanned, avoiding expensive traversal of the entire session history.
+
+**Message type -> Status mapping:**
+
+| `type` field | Condition | Status |
+|---|---|---|
+| `"message"` | `role="user"` | `Thinking` |
+| `"message"` | `role="assistant"`, has `function_call` | `ToolUse` |
+| `"message"` | `role="assistant"`, otherwise | `Responding` |
+| `"function_call_output"` | Any | `ToolUse` |
+| `"error"` | Any | `Error` |
+| `"exec_result"` | `exit_code=0` | `TaskComplete` |
+| `"exec_result"` | `exit_code!=0` | `Error` |
+
+**Token extraction:** Extracted from `usage` objects in assistant messages (`input_tokens`, `output_tokens`). Cached cumulatively in parser state.
+
+**CWD extraction:** Parsed from the initial session metadata event and cached for agent-process correlation.
+
+**Agent ID format:** `log-{session_uuid_prefix_8}--codex` — derived from the session UUID in the rollout filename.
+
+**Sub-agent tracking:** Tracks `function_call` → `function_call_output` lifecycles via `call_id`. Each `function_call` event creates one or more `SubAgentInfo` entries stored in `active_calls` (keyed by `call_id`). When `function_call_output` arrives with a matching `call_id`, all entries are removed and returned as `completed_sub_agent_ids`. For `exec_command` calls with parallel bash syntax (e.g. `bash -lc '(cmd1) & (cmd2) & wait'`), the parser detects individual subshell commands and creates separate sub-agent entries (IDs: `{call_id}:0`, `{call_id}:1`, etc.) with cleaned command descriptions. Non-parallel `exec_command` calls create a single sub-agent with the command as the description.
+
 ### Parser Capabilities Comparison
 
 Not all parsers extract the same data. This table documents current capabilities and known limitations per parser.
 
-| Capability | Claude Code | Gemini CLI | Impact |
-|---|---|---|---|
-| **Log format** | JSONL (line-by-line, byte position tracking) | JSON array (full re-read, message count tracking) | Gemini has higher I/O per poll cycle |
-| **Status: Thinking** | `type="user"` with real text | `type="user"` with text | Same |
-| **Status: Responding** | `type="assistant"` without tool_use | `type="gemini"` without toolCalls | Same |
-| **Status: ToolUse** | `type="assistant"` with tool_use / `type="progress"` | `type="gemini"` with toolCalls | Same |
-| **Status: TaskComplete** | `stop_reason="end_turn"` | **Not supported** | Gemini agents stay in Responding until auto-idle timeout (30s) |
-| **Status: Error** | `type="error"` | `type="info"` with "cancelled" | Gemini only detects user cancellation |
-| **Model extraction** | `message.model` (priority) or top-level `model` | Top-level `model` field | Same |
-| **Token counting** | `message.usage` (`input + cache_read + cache_creation`) | `tokens.input` / `tokens.output` (`cached` parsed but unused) | Claude includes cache tokens in sum; Gemini does not |
-| **Sub-agent detection** | `tool_use` blocks with `name="Task"` or `name="Agent"` | **Not supported** (`sub_agents` always empty) | Gemini tool calls are regular tool use, not sub-agents |
-| **Sub-agent completion** | `tool_result` blocks + `queue-operation` notifications | **Not supported** (`completed_sub_agent_ids` always empty) | Gemini sub-agents are never removed from the list (cleared only on status reset) |
-| **Async agent detection** | Filters "Async agent launched" results | **Not supported** | N/A for Gemini |
-| **CWD (working directory)** | Extracted from JSONL `cwd` field | **Always `None`** | Gemini relies on model-hint fallback for agent-process correlation (step 4 in `resolve_agent_id`) |
-| **Meta message filtering** | `isMeta: true` → skip | **No equivalent** | N/A |
-| **XML command filtering** | Strips `<command-name>`, `<local-command-*>` from text | **No equivalent** | N/A |
-| **ID format** | `log-{project}--{uuid_prefix_8}` | `log-{project}--{session_prefix_16}` | Different prefix lengths |
+| Capability | Claude Code | Gemini CLI | Codex CLI | Impact |
+|---|---|---|---|---|
+| **Log format** | JSONL (line-by-line, byte position tracking) | JSON array (full re-read, message count tracking) | JSONL (line-by-line, byte position tracking) | Gemini has higher I/O per poll cycle |
+| **Status: Thinking** | `type="user"` with real text | `type="user"` with text | `type="message"` with `role="user"` | Same |
+| **Status: Responding** | `type="assistant"` without tool_use | `type="gemini"` without toolCalls | `type="message"` with `role="assistant"` (no function_call) | Same |
+| **Status: ToolUse** | `type="assistant"` with tool_use / `type="progress"` | `type="gemini"` with toolCalls | `type="message"` with `function_call` / `type="function_call_output"` | Same |
+| **Status: TaskComplete** | `stop_reason="end_turn"` | **Not supported** | `type="exec_result"` with `exit_code=0` | Gemini agents stay in Responding until auto-idle timeout (30s) |
+| **Status: Error** | `type="error"` | `type="info"` with "cancelled" | `type="error"` / `exec_result` with `exit_code!=0` | Gemini only detects user cancellation |
+| **Model extraction** | `message.model` (priority) or top-level `model` | Top-level `model` field | Cached from session metadata (stateful) | Same |
+| **Token counting** | `message.usage` (`input + cache_read + cache_creation`) | `tokens.input` / `tokens.output` (`cached` parsed but unused) | `usage.input_tokens` / `usage.output_tokens` (cumulative in parser state) | Claude includes cache tokens in sum; Gemini does not |
+| **Sub-agent detection** | `tool_use` blocks with `name="Task"` or `name="Agent"` | **Not supported** (`sub_agents` always empty) | `function_call` → sub-agent per call; `exec_command` with parallel bash → multiple sub-agents | Codex tracks function_call/function_call_output lifecycle |
+| **Sub-agent completion** | `tool_result` blocks + `queue-operation` notifications | **Not supported** (`completed_sub_agent_ids` always empty) | `function_call_output` with matching `call_id` completes all sub-agents for that call | Codex completes all sub-agents atomically per call_id |
+| **Async agent detection** | Filters "Async agent launched" results | **Not supported** | **Not supported** | N/A for Gemini/Codex |
+| **CWD (working directory)** | Extracted from JSONL `cwd` field | **Always `None`** | Cached from session metadata (stateful) | Gemini relies on model-hint fallback for agent-process correlation (step 4 in `resolve_agent_id`) |
+| **Meta message filtering** | `isMeta: true` → skip | **No equivalent** | **No equivalent** | N/A |
+| **XML command filtering** | Strips `<command-name>`, `<local-command-*>` from text | **No equivalent** | **No equivalent** | N/A |
+| **ID format** | `log-{project}--{uuid_prefix_8}` | `log-{project}--{session_prefix_16}` | `log-{session_uuid_prefix_8}--codex` | Different prefix lengths and formats |
 
 **Consequences of Gemini limitations:**
 

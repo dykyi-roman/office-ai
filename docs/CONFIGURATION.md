@@ -108,7 +108,21 @@ Regex patterns for detecting AI agent processes by name or full command line. Th
 
 **Config migration:** On startup, `AppConfig::ensure_defaults()` checks that all default patterns and log roots are present in the saved config. If patterns were added in a newer version (e.g., Gemini support), they are automatically merged into the saved config without removing user-customized patterns.
 
-### 2.6. Debug Mode
+### 2.6. Custom Model Keywords
+
+**Key:** `customModelKeywords` | **Type:** `HashMap<String, String>` | **Default:** `{}`
+
+User-defined keyword → model mappings for process detection. These are checked **before** the built-in keywords (claude, gemini, aider, cursor, copilot), so custom entries take priority and can even override built-ins.
+
+```toml
+[customModelKeywords]
+windsurf = "windsurf"
+cody = "cody"
+```
+
+This allows adding support for new CLI agents without rebuilding the application. When a process name or command line contains the keyword (case-insensitive), it is assigned the corresponding model name.
+
+### 2.7. Debug Mode
 
 **Key:** `debug_mode` | **Type:** `bool` | **Default:** `false`
 

@@ -2,6 +2,7 @@
 // Loaded from ~/.config/office-ai/config.toml
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -60,6 +61,17 @@ pub struct AppConfig {
     /// Default: false
     #[serde(default)]
     pub debug_mode: bool,
+
+    /// User-defined keyword → model mappings for process detection.
+    /// Checked before built-in MODEL_KEYWORDS, so custom entries take priority.
+    /// Example in config.toml:
+    /// ```toml
+    /// [customModelKeywords]
+    /// windsurf = "windsurf"
+    /// cody = "cody"
+    /// ```
+    #[serde(default)]
+    pub custom_model_keywords: HashMap<String, String>,
 }
 
 fn default_scan_interval() -> u64 {
@@ -100,6 +112,8 @@ fn default_agent_process_patterns() -> Vec<String> {
         "node.*claude".to_string(),
         "gemini".to_string(),
         "node.*gemini".to_string(),
+        "codex".to_string(),
+        "node.*codex".to_string(),
     ]
 }
 
@@ -117,6 +131,7 @@ fn default_log_roots() -> Vec<PathBuf> {
             vec![
                 h.join(".claude").join("projects"),
                 h.join(".gemini").join("tmp"),
+                h.join(".codex").join("sessions"),
             ]
         })
         .unwrap_or_default()
@@ -139,6 +154,7 @@ impl Default for AppConfig {
             work_timeout_ms: default_work_timeout(),
             responding_timeout_ms: default_responding_timeout(),
             debug_mode: false,
+            custom_model_keywords: HashMap::new(),
         }
     }
 }
@@ -192,6 +208,10 @@ mod tests {
         assert!(config
             .agent_process_patterns
             .contains(&"node.*gemini".to_string()));
+        assert!(config.agent_process_patterns.contains(&"codex".to_string()));
+        assert!(config
+            .agent_process_patterns
+            .contains(&"node.*codex".to_string()));
     }
 
     #[test]
@@ -228,6 +248,13 @@ mod tests {
     }
 
     #[test]
+    fn test_default_patterns_include_codex() {
+        let defaults = default_agent_process_patterns();
+        assert!(defaults.contains(&"codex".to_string()));
+        assert!(defaults.contains(&"node.*codex".to_string()));
+    }
+
+    #[test]
     fn test_default_debug_mode_is_false() {
         let config = AppConfig::default();
         assert!(!config.debug_mode);
@@ -240,5 +267,12 @@ mod tests {
             .iter()
             .any(|r| r.to_string_lossy().contains(".gemini"));
         assert!(has_gemini);
+    }
+
+    #[test]
+    fn test_default_log_roots_include_codex() {
+        let roots = default_log_roots();
+        let has_codex = roots.iter().any(|r| r.to_string_lossy().contains(".codex"));
+        assert!(has_codex);
     }
 }

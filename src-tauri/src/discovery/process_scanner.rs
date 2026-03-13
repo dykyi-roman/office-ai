@@ -2,6 +2,7 @@
 // Detects Claude Code, Claude CLI, and custom agent processes
 
 use crate::models::{AgentState, AppConfig, IdleLocation, Source, Status, Tier};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::System;
@@ -10,7 +11,14 @@ use tokio::time::Duration;
 
 /// Built-in detection patterns for AI agent processes (used in tests)
 #[cfg(test)]
-const BUILTIN_PATTERNS: &[&str] = &["claude", "node.*claude", "gemini", "node.*gemini"];
+const BUILTIN_PATTERNS: &[&str] = &[
+    "claude",
+    "node.*claude",
+    "gemini",
+    "node.*gemini",
+    "codex",
+    "node.*codex",
+];
 
 /// Process names that should never be treated as AI agents,
 /// even if "claude" appears in their command line arguments.
@@ -138,10 +146,7 @@ fn get_ps_entries() -> Vec<PsEntry> {
                 .join(" ");
             PsEntry {
                 pid: pid.as_u32(),
-                ppid: proc_info
-                    .parent()
-                    .map(|p| p.as_u32())
-                    .unwrap_or(0),
+                ppid: proc_info.parent().map(|p| p.as_u32()).unwrap_or(0),
                 tty: "console".to_string(), // Windows has no TTY; treat all as interactive
                 stat: "S".to_string(),      // No stat info; assume running
                 args,
@@ -176,22 +181,36 @@ pub fn matches_agent_pattern(name: &str, cmdline: &str, patterns: &[&str]) -> bo
 const MODEL_KEYWORDS: &[(&str, &str)] = &[
     ("gemini", "gemini"),
     ("claude", "claude"),
+    ("codex", "codex"),
     ("aider", "aider"),
     ("cursor", "cursor"),
     ("copilot", "copilot"),
 ];
 
 /// Infer the initial model name from the process name and command line.
-/// Scans MODEL_KEYWORDS for the first match; returns "unknown" if none match.
-pub fn infer_initial_model(name: &str, cmdline: &str) -> &'static str {
+/// Checks custom keywords first (user-defined, from config), then built-in MODEL_KEYWORDS.
+/// Returns "unknown" if no keyword matches.
+pub fn infer_initial_model(
+    name: &str,
+    cmdline: &str,
+    custom_keywords: &HashMap<String, String>,
+) -> String {
     let lower_name = name.to_lowercase();
     let lower_cmd = cmdline.to_lowercase();
-    for &(keyword, model) in MODEL_KEYWORDS {
-        if lower_name.contains(keyword) || lower_cmd.contains(keyword) {
-            return model;
+    // Custom keywords take priority
+    for (keyword, model) in custom_keywords {
+        let kw = keyword.to_lowercase();
+        if lower_name.contains(&kw) || lower_cmd.contains(&kw) {
+            return model.clone();
         }
     }
-    "unknown"
+    // Fall back to built-in keywords
+    for &(keyword, model) in MODEL_KEYWORDS {
+        if lower_name.contains(keyword) || lower_cmd.contains(keyword) {
+            return model.to_string();
+        }
+    }
+    "unknown".to_string()
 }
 
 /// Derive a human-friendly agent name from process name and command line.
@@ -220,7 +239,11 @@ fn derive_agent_name(name: &str, cmdline: &str) -> String {
 }
 
 /// Convert detected process into an AgentState.
-pub fn process_to_agent_state(proc: &DetectedProcess) -> AgentState {
+/// Accepts custom model keywords from config for extensible model inference.
+pub fn process_to_agent_state(
+    proc: &DetectedProcess,
+    custom_keywords: &HashMap<String, String>,
+) -> AgentState {
     let id = format!("pid-{}", proc.pid);
     let timestamp = chrono::Utc::now().to_rfc3339();
     let agent_name = derive_agent_name(&proc.name, &proc.cmdline);
@@ -230,7 +253,7 @@ pub fn process_to_agent_state(proc: &DetectedProcess) -> AgentState {
         id,
         pid: Some(proc.pid),
         name: display_name,
-        model: infer_initial_model(&proc.name, &proc.cmdline).to_string(),
+        model: infer_initial_model(&proc.name, &proc.cmdline, custom_keywords),
         tier: Tier::Middle,
         role: "agent".to_string(),
         status: Status::Idle,
@@ -403,6 +426,7 @@ pub async fn run_scanner(config: Arc<RwLock<AppConfig>>, tx: mpsc::Sender<Scanne
         let interval_ms = cfg.scan_interval_ms;
         let patterns = cfg.agent_process_patterns.clone();
         let debug_mode = cfg.debug_mode;
+        let custom_keywords = cfg.custom_model_keywords.clone();
         drop(cfg);
         tokio::time::sleep(Duration::from_millis(interval_ms)).await;
 
@@ -433,7 +457,7 @@ pub async fn run_scanner(config: Arc<RwLock<AppConfig>>, tx: mpsc::Sender<Scanne
             if known_pids.contains_key(&proc.pid) {
                 continue;
             }
-            let agent = process_to_agent_state(proc);
+            let agent = process_to_agent_state(proc, &custom_keywords);
             let cwd = proc.cwd.clone();
             app_log!(
                 "SCANNER",
@@ -463,10 +487,7 @@ pub async fn run_scanner(config: Arc<RwLock<AppConfig>>, tx: mpsc::Sender<Scanne
                         );
                         *known_cwd = Some(new_cwd.clone());
                         if tx
-                            .send(ScannerEvent::CwdUpdated(
-                                agent.id.clone(),
-                                new_cwd.clone(),
-                            ))
+                            .send(ScannerEvent::CwdUpdated(agent.id.clone(), new_cwd.clone()))
                             .await
                             .is_err()
                         {
@@ -560,6 +581,20 @@ mod tests {
     }
 
     #[test]
+    fn test_matches_codex_by_name() {
+        assert!(matches_agent_pattern("codex", "", BUILTIN_PATTERNS));
+    }
+
+    #[test]
+    fn test_matches_node_codex_in_cmdline() {
+        assert!(matches_agent_pattern(
+            "node",
+            "/usr/bin/node /opt/homebrew/bin/codex",
+            BUILTIN_PATTERNS
+        ));
+    }
+
+    #[test]
     fn test_process_scanner_ignores_non_agents() {
         assert!(!matches_agent_pattern(
             "bash",
@@ -587,7 +622,7 @@ mod tests {
             start_time: 1000,
             cwd: Some("/home/user/project".to_string()),
         };
-        let agent = process_to_agent_state(&proc);
+        let agent = process_to_agent_state(&proc, &HashMap::new());
         assert_eq!(agent.pid, Some(12345));
         assert_eq!(agent.id, "pid-12345");
         assert_eq!(agent.name, "claude-12345");
@@ -604,7 +639,7 @@ mod tests {
             start_time: 1000,
             cwd: Some("/home/user/project".to_string()),
         };
-        let agent = process_to_agent_state(&proc);
+        let agent = process_to_agent_state(&proc, &HashMap::new());
         assert_eq!(agent.model, "gemini");
         assert_eq!(agent.name, "gemini-99999");
     }
@@ -618,31 +653,78 @@ mod tests {
             start_time: 1000,
             cwd: Some("/home/user/project".to_string()),
         };
-        let agent = process_to_agent_state(&proc);
+        let agent = process_to_agent_state(&proc, &HashMap::new());
         assert_eq!(agent.model, "gemini");
         assert_eq!(agent.name, "gemini-88888");
     }
 
     #[test]
     fn test_infer_initial_model() {
-        assert_eq!(infer_initial_model("claude", ""), "claude");
-        assert_eq!(infer_initial_model("gemini", ""), "gemini");
-        assert_eq!(infer_initial_model("Gemini", ""), "gemini");
-        assert_eq!(infer_initial_model("node-gemini", ""), "gemini");
+        let empty = HashMap::new();
+        assert_eq!(infer_initial_model("claude", "", &empty), "claude");
+        assert_eq!(infer_initial_model("gemini", "", &empty), "gemini");
+        assert_eq!(infer_initial_model("Gemini", "", &empty), "gemini");
+        assert_eq!(infer_initial_model("node-gemini", "", &empty), "gemini");
         assert_eq!(
-            infer_initial_model("node", "node --no-warnings /opt/homebrew/bin/gemini"),
+            infer_initial_model(
+                "node",
+                "node --no-warnings /opt/homebrew/bin/gemini",
+                &empty
+            ),
             "gemini"
         );
         // Unknown processes no longer default to "claude"
-        assert_eq!(infer_initial_model("node", "node"), "unknown");
-        assert_eq!(infer_initial_model("python", "python script.py"), "unknown");
-        // New agent keywords
-        assert_eq!(infer_initial_model("aider", "aider --model gpt-4"), "aider");
+        assert_eq!(infer_initial_model("node", "node", &empty), "unknown");
         assert_eq!(
-            infer_initial_model("node", "node /usr/bin/cursor"),
+            infer_initial_model("python", "python script.py", &empty),
+            "unknown"
+        );
+        // New agent keywords
+        assert_eq!(
+            infer_initial_model("aider", "aider --model gpt-4", &empty),
+            "aider"
+        );
+        assert_eq!(
+            infer_initial_model("node", "node /usr/bin/cursor", &empty),
             "cursor"
         );
-        assert_eq!(infer_initial_model("copilot", ""), "copilot");
+        assert_eq!(infer_initial_model("copilot", "", &empty), "copilot");
+        // Codex
+        assert_eq!(infer_initial_model("codex", "", &empty), "codex");
+        assert_eq!(
+            infer_initial_model("node", "node /opt/homebrew/bin/codex", &empty),
+            "codex"
+        );
+    }
+
+    #[test]
+    fn test_infer_initial_model_custom_keywords() {
+        let mut custom = HashMap::new();
+        custom.insert("windsurf".to_string(), "windsurf".to_string());
+        custom.insert("cody".to_string(), "cody".to_string());
+
+        // Custom keywords match
+        assert_eq!(infer_initial_model("windsurf", "", &custom), "windsurf");
+        assert_eq!(
+            infer_initial_model("node", "node /usr/bin/cody", &custom),
+            "cody"
+        );
+        // Built-in still works
+        assert_eq!(infer_initial_model("claude", "", &custom), "claude");
+        // Unknown still returns "unknown"
+        assert_eq!(
+            infer_initial_model("python", "python script.py", &custom),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn test_infer_initial_model_custom_overrides_builtin() {
+        let mut custom = HashMap::new();
+        // Override "claude" to map to a custom model name
+        custom.insert("claude".to_string(), "my-claude-fork".to_string());
+
+        assert_eq!(infer_initial_model("claude", "", &custom), "my-claude-fork");
     }
 
     #[test]
@@ -676,7 +758,7 @@ mod tests {
             start_time: 1000,
             cwd: None,
         };
-        let agent = process_to_agent_state(&proc);
+        let agent = process_to_agent_state(&proc, &HashMap::new());
         assert_eq!(agent.model, "unknown");
     }
 
@@ -696,10 +778,26 @@ mod tests {
             start_time: 1000,
             cwd: None,
         };
-        let agent1 = process_to_agent_state(&proc1);
-        let agent2 = process_to_agent_state(&proc2);
+        let agent1 = process_to_agent_state(&proc1, &HashMap::new());
+        let agent2 = process_to_agent_state(&proc2, &HashMap::new());
         assert_eq!(agent1.name, "claude-100");
         assert_eq!(agent2.name, "claude-200");
+    }
+
+    #[test]
+    fn test_process_to_agent_state_with_custom_keywords() {
+        let mut custom = HashMap::new();
+        custom.insert("windsurf".to_string(), "windsurf".to_string());
+
+        let proc = DetectedProcess {
+            pid: 42000,
+            name: "windsurf".to_string(),
+            cmdline: "windsurf --project /tmp".to_string(),
+            start_time: 1000,
+            cwd: None,
+        };
+        let agent = process_to_agent_state(&proc, &custom);
+        assert_eq!(agent.model, "windsurf");
     }
 
     #[cfg(unix)]

@@ -236,6 +236,11 @@ pub fn apply_config_value(config: &mut AppConfig, key: &str, value: &str) -> Res
                 .parse::<bool>()
                 .map_err(|_| format!("Invalid boolean for {key}: {value}"))?;
         }
+        "customModelKeywords" => {
+            // Accepts JSON object: {"windsurf":"windsurf","cody":"cody"}
+            config.custom_model_keywords =
+                serde_json::from_str(value).map_err(|e| format!("Invalid JSON for {key}: {e}"))?;
+        }
         _ => {
             return Err(format!("Unknown config key: {key}"));
         }
@@ -490,5 +495,32 @@ mod tests {
         std::fs::write(tmp.path(), &toml_str).unwrap();
         let read_back = std::fs::read_to_string(tmp.path()).unwrap();
         assert!(read_back.contains("retro"));
+    }
+
+    #[test]
+    fn test_apply_config_custom_model_keywords() {
+        let mut config = AppConfig::default();
+        apply_config_value(
+            &mut config,
+            "customModelKeywords",
+            r#"{"windsurf":"windsurf","cody":"cody"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.custom_model_keywords.len(), 2);
+        assert_eq!(
+            config.custom_model_keywords.get("windsurf"),
+            Some(&"windsurf".to_string())
+        );
+        assert_eq!(
+            config.custom_model_keywords.get("cody"),
+            Some(&"cody".to_string())
+        );
+    }
+
+    #[test]
+    fn test_apply_config_custom_model_keywords_invalid_json() {
+        let mut config = AppConfig::default();
+        let result = apply_config_value(&mut config, "customModelKeywords", "not json");
+        assert!(result.is_err());
     }
 }

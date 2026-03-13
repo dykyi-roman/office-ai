@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-03-13
+
+### Added
+- **Codex CLI Support** — Full process detection, JSONL log parsing, and state tracking for OpenAI Codex CLI sessions (`~/.codex/sessions/`).
+- **Codex Sub-Agent Tracking** — Tracks `function_call` → `function_call_output` lifecycles as sub-agents. Detects parallel bash commands (`bash -lc '(cmd1) & (cmd2) & wait'`) and surfaces each as a separate sub-agent in the UI.
+- **Codex Model Tier Mapping** — GPT-5 model family support: `gpt-5-codex`/`gpt-5.3-codex` → Senior, `gpt-5.4` → Expert, `codex-mini`/`codex-spark` → Junior.
+- **Custom Model Keywords** — New `customModelKeywords` config option allowing users to define custom process → model mappings (e.g., `windsurf`, `cody`) with priority over built-in keywords.
+
+### Changed
+- **Process Scanner** — Extended with Codex CLI detection patterns (`codex`, `node.*codex`) in default config.
+- **Default Log Roots** — Added `~/.codex/sessions/` to default monitored directories.
+- **Model Inference** — `infer_initial_model()` now accepts custom keywords map, with user-defined entries taking priority over built-ins.
+
 ## [0.2.0] - 2026-03-08
 
 ### Added

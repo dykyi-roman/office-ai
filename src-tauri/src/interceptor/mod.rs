@@ -2,6 +2,7 @@
 // Parses agent logs and classifies states via FSM
 
 pub mod claude_code_parser;
+pub mod codex_cli_parser;
 pub mod gemini_cli_parser;
 pub mod parsed_event;
 pub mod parser_registry;

@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-active%20development-brightgreen?style=for-the-badge" alt="Status" />
-  <img src="https://img.shields.io/badge/version-0.1.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.3.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/tauri-v2-orange?style=for-the-badge" alt="Tauri" />
   <img src="https://img.shields.io/badge/svelte-5-red?style=for-the-badge" alt="Svelte" />
   <img src="https://img.shields.io/badge/pixi.js-v8-purple?style=for-the-badge" alt="PixiJS" />
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  Every running AI agent (Claude Code, ChatGPT, Gemini, ...) appears as an animated character in a 2D isometric office. Install, open — see all your agents in real time. Zero changes to your CLI workflow required.
+  Every running AI agent (Claude Code, Gemini CLI, Codex CLI, ChatGPT, ...) appears as an animated character in a 2D isometric office. Install, open — see all your agents in real time. Zero changes to your CLI workflow required.
 </p>
 
 ---
@@ -66,7 +66,7 @@ The app opens in a native 1280x800 window. The Rust backend automatically starts
 ## Basic Usage
 
 1. **Launch OfficeAI:** Start the app using `make dev` or open the installed binary.
-2. **Run your AI Agent:** Open a **separate terminal** and start your preferred agent (e.g., `claude` or `gemini-cli`).
+2. **Run your AI Agent:** Open a **separate terminal** and start your preferred agent (e.g., `claude`, `gemini-cli`, or `codex`).
 3. **Watch the Office:** OfficeAI will automatically detect the new process. An employee character will appear, walk to their assigned desk, and begin reflecting the agent's real-time state (thinking, typing, or using tools).
 4. **Interact:** Hover over agents to see their latest response or click the status bar to see a full list of active employees.
 
@@ -79,7 +79,7 @@ Each running AI agent is mapped to an animated office employee in a 2D isometric
 **Key principles:**
 
 - **1 agent = 1 person** — each AI agent process maps to a virtual employee
-- **Agent naming** — `{model name}-{PID}`, e.g. `claude-423235`, `gemini-23512`, `chatgpt-78901`
+- **Agent naming** — `{model name}-{PID}`, e.g. `claude-423235`, `gemini-23512`, `codex-54321`, `chatgpt-78901`
 - **Open space** — every agent has a personal desk
 - **Zero-intrusion** — the app never modifies or wraps CLI agents
 - **Auto-discovery** — the system detects running agents automatically
@@ -266,6 +266,7 @@ The system uses different detection strategies depending on the agent type:
 |-------------------------|---------------|------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
 | **Claude Code (CLI)**   | Implemented   | Process scanning via `sysinfo` crate. Monitoring `~/.claude/projects/` directory               | Log file parsing: `user_prompt`, `assistant_start`, `tool_use`, `assistant_end`       |
 | **Gemini CLI**          | Implemented   | Process scanning (`gemini`, `node.*gemini`). Monitoring `~/.gemini/tmp/` directory              | JSON-array session parsing: `user`, `gemini`, `info` messages                          |
+| **Codex CLI**           | Implemented   | Process scanning (`codex`). Monitoring `~/.codex/sessions/` directory                          | JSONL parsing: `message`, `function_call_output`, `exec_result` events                 |
 
 ---
 

@@ -32,6 +32,7 @@ impl Tier {
             || m.contains("flash")
             || m.contains("gpt-3.5")
             || m.contains("-mini")
+            || m.contains("codex-spark")
         {
             return Tier::Junior;
         }
@@ -40,6 +41,7 @@ impl Tier {
         if m.contains("opus")
             || m.contains("ultra")
             || m.contains("gpt-4o")
+            || m.contains("gpt-5.4")
             || m.starts_with("o1")
             || m.starts_with("o3")
         {
@@ -47,7 +49,12 @@ impl Tier {
         }
 
         // Senior tier
-        if m.contains("sonnet") || m.contains("pro") || m.contains("gpt-4") {
+        if m.contains("sonnet")
+            || m.contains("pro")
+            || m.contains("gpt-4")
+            || m.contains("gpt-5-codex")
+            || m.contains("gpt-5.3-codex")
+        {
             return Tier::Senior;
         }
 
@@ -330,5 +337,37 @@ mod tests {
     #[test]
     fn test_tier_from_model_o3_mini() {
         assert_eq!(Tier::from_model("o3-mini"), Tier::Junior);
+    }
+
+    // Codex / GPT-5 model family
+    #[test]
+    fn test_tier_from_model_gpt5_4() {
+        assert_eq!(Tier::from_model("gpt-5.4"), Tier::Expert);
+        assert_eq!(Tier::from_model("gpt-5.4-preview"), Tier::Expert);
+    }
+
+    #[test]
+    fn test_tier_from_model_gpt5_codex() {
+        assert_eq!(Tier::from_model("gpt-5-codex"), Tier::Senior);
+        assert_eq!(Tier::from_model("gpt-5.3-codex"), Tier::Senior);
+    }
+
+    #[test]
+    fn test_tier_from_model_codex_spark() {
+        assert_eq!(Tier::from_model("codex-spark"), Tier::Junior);
+    }
+
+    #[test]
+    fn test_tier_from_model_codex_mini() {
+        assert_eq!(Tier::from_model("codex-mini"), Tier::Junior);
+        assert_eq!(Tier::from_model("gpt-5.1-codex-mini"), Tier::Junior);
+        assert_eq!(Tier::from_model("o4-mini"), Tier::Junior);
+    }
+
+    #[test]
+    fn test_tier_from_model_gpt5_other() {
+        // Generic gpt-5 models without specific keywords → Middle
+        assert_eq!(Tier::from_model("gpt-5"), Tier::Middle);
+        assert_eq!(Tier::from_model("gpt-5.2"), Tier::Middle);
     }
 }

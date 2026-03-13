@@ -14,6 +14,7 @@ use discovery::log_reader::LogFileReader;
 use discovery::log_watcher::{run_log_watcher, RawLogLine};
 use discovery::process_scanner::{run_scanner, ScannerEvent};
 use interceptor::claude_code_parser::ClaudeCodeParser;
+use interceptor::codex_cli_parser::CodexCliParser;
 use interceptor::gemini_cli_parser::GeminiCliParser;
 use interceptor::parser_registry::ParserRegistry;
 use interceptor::parser_trait::AgentLogParser;
@@ -106,6 +107,7 @@ pub fn run() {
             let parsers: Vec<Arc<dyn AgentLogParser>> = vec![
                 Arc::new(ClaudeCodeParser),
                 Arc::new(GeminiCliParser),
+                Arc::new(CodexCliParser::new()),
             ];
 
             let mut parser_registry = ParserRegistry::new();
