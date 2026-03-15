@@ -32,6 +32,7 @@ const MOCK_AGENTS: AgentState[] = [
       { id: "sa-3", description: "Generate sprite assets" },
     ],
     lastActivity: new Date(Date.now() - 3600 * 1000).toISOString(),
+    startedAt: new Date(Date.now() - 7200 * 1000).toISOString(),
     source: "cli",
   },
   {
@@ -51,6 +52,7 @@ const MOCK_AGENTS: AgentState[] = [
       { id: "sa-5", description: "Parse JSONL logs" },
     ],
     lastActivity: new Date(Date.now() - 1800 * 1000).toISOString(),
+    startedAt: new Date(Date.now() - 5400 * 1000).toISOString(),
     source: "cli",
   },
   {
@@ -67,6 +69,7 @@ const MOCK_AGENTS: AgentState[] = [
     tokensOut: 3200,
     subAgents: [],
     lastActivity: new Date(Date.now() - 900 * 1000).toISOString(),
+    startedAt: new Date(Date.now() - 3600 * 1000).toISOString(),
     source: "browser_extension",
   },
   {
@@ -83,6 +86,7 @@ const MOCK_AGENTS: AgentState[] = [
     tokensOut: 1900,
     subAgents: [],
     lastActivity: new Date(Date.now() - 7200 * 1000).toISOString(),
+    startedAt: new Date(Date.now() - 10800 * 1000).toISOString(),
     source: "browser_extension",
   },
 ];

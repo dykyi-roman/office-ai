@@ -34,19 +34,23 @@
   }
 
   onMount(() => {
-    // Initialize stores asynchronously (subscribe to Tauri events / load settings)
+    // Initialize stores first, then renderer (renderer reads store for mock data fallback)
     void initSettingsStore();
-    void initAgentsStore();
     void initSoundBridge();
 
-    // Initialize PixiJS renderer
-    const canvas = document.getElementById("office-canvas");
-    if (canvas) {
-      scene = new OfficeScene();
-      scene.init(canvas).catch((err) => {
-        console.error("[App] Failed to initialize OfficeScene:", err);
-      });
-    }
+    const startup = async () => {
+      await initAgentsStore();
+
+      const canvas = document.getElementById("office-canvas");
+      if (canvas) {
+        scene = new OfficeScene();
+        await scene.init(canvas);
+      }
+    };
+
+    startup().catch((err) => {
+      console.error("[App] Failed to initialize:", err);
+    });
 
     // Register agent selection listener (emitted by PixiJS renderer)
     window.addEventListener("office:select-agent", onAgentSelect);

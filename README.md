@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-active%20development-brightgreen?style=for-the-badge" alt="Status" />
-  <img src="https://img.shields.io/badge/version-0.3.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.4.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/tauri-v2-orange?style=for-the-badge" alt="Tauri" />
   <img src="https://img.shields.io/badge/svelte-5-red?style=for-the-badge" alt="Svelte" />
   <img src="https://img.shields.io/badge/pixi.js-v8-purple?style=for-the-badge" alt="PixiJS" />

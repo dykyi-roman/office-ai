@@ -262,7 +262,8 @@ pub fn process_to_agent_state(
         tokens_in: 0,
         tokens_out: 0,
         sub_agents: vec![],
-        last_activity: timestamp,
+        last_activity: timestamp.clone(),
+        started_at: timestamp,
         source: infer_source_from_name(&proc.name),
     }
 }

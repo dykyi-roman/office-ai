@@ -4,7 +4,6 @@
     getSelectedAgent,
     isSidebarOpen,
     deselectAgent,
-    getSelectedAgentId,
   } from "$lib/stores/index.svelte";
   import {
     statusColor,
@@ -28,8 +27,6 @@
   // Reactive values from stores
   const agent = $derived(getSelectedAgent());
   const open = $derived(isSidebarOpen());
-  const agentId = $derived(getSelectedAgentId());
-
   // Log history — accumulated per agent session
   let logHistory = $state<LogEntry[]>([]);
   let lastAgentId = $state<string | null>(null);
@@ -68,18 +65,18 @@
     }
   });
 
-  // Live uptime counter
-  let uptimeSec = $state(0);
+  // Live session duration counter (from startedAt)
+  let sessionSec = $state(0);
 
   $effect(() => {
     const currentAgent = agent;
     if (!currentAgent) {
-      uptimeSec = 0;
+      sessionSec = 0;
       return;
     }
-    uptimeSec = uptimeFromLastActivity(currentAgent.lastActivity);
+    sessionSec = uptimeFromLastActivity(currentAgent.startedAt);
     const interval = setInterval(() => {
-      uptimeSec = uptimeFromLastActivity(currentAgent.lastActivity);
+      sessionSec = uptimeFromLastActivity(currentAgent.startedAt);
     }, 5000);
     return () => clearInterval(interval);
   });
@@ -91,35 +88,22 @@
     }
   }
 
-  // Emit follow-camera event (integrate with PixiJS renderer via custom event)
-  function followCamera(): void {
-    if (!agentId) return;
-    window.dispatchEvent(
-      new CustomEvent("office:follow-agent", { detail: { id: agentId } }),
-    );
+  // Close sidebar when clicking empty space on canvas
+  function onDeselectAgent(): void {
+    deselectAgent();
   }
 
-  // Open full logs modal (placeholder — renderer will handle)
-  function viewLogs(): void {
-    if (!agentId) return;
-    window.dispatchEvent(
-      new CustomEvent("office:view-logs", { detail: { id: agentId } }),
-    );
-  }
+  $effect(() => {
+    window.addEventListener("office:deselect-agent", onDeselectAgent);
+    return () => window.removeEventListener("office:deselect-agent", onDeselectAgent);
+  });
+
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
 <!-- Sidebar panel -->
 {#if open && agent}
-  <!-- Backdrop for click-outside-to-close -->
-  <button
-    class="sidebar-backdrop"
-    aria-label={t("sidebar.closeAgent")}
-    onclick={deselectAgent}
-    tabindex="-1"
-  ></button>
-
   <aside
     class="sidebar panel"
     aria-label="{t('sidebar.agentDetails')} {agent.name}"
@@ -195,11 +179,19 @@
       </div>
     </section>
 
-    <!-- Uptime row -->
-    <section class="detail-section" aria-label={t("sidebar.uptime")}>
-      <div class="detail-label">{t("sidebar.uptime")}</div>
-      <div class="detail-value mono">{formatUptime(uptimeSec)}</div>
+    <!-- Session row -->
+    <section class="detail-section" aria-label={t("sidebar.session")}>
+      <div class="detail-label">{t("sidebar.session")}</div>
+      <div class="detail-value mono">{formatUptime(sessionSec)}</div>
     </section>
+
+    <!-- PID row -->
+    {#if agent.pid !== null}
+      <section class="detail-section" aria-label={t("sidebar.pid")}>
+        <div class="detail-label">{t("sidebar.pid")}</div>
+        <div class="detail-value mono">{agent.pid}</div>
+      </section>
+    {/if}
 
     <!-- Source row -->
     <section class="detail-section" aria-label={t("sidebar.source")}>
@@ -232,32 +224,10 @@
       <MiniLog entries={logHistory} />
     </section>
 
-    <hr class="divider" />
-
-    <!-- Action buttons -->
-    <footer class="sidebar-footer">
-      <button class="btn btn--primary" onclick={followCamera}>
-        {t("sidebar.follow")}
-      </button>
-      <button class="btn" onclick={viewLogs}>
-        {t("sidebar.viewLogs")}
-      </button>
-    </footer>
   </aside>
 {/if}
 
 <style>
-  /* Backdrop */
-  .sidebar-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: calc(var(--z-sidebar) - 1);
-    background: transparent;
-    border: none;
-    cursor: default;
-    pointer-events: all;
-  }
-
   /* Sidebar panel */
   .sidebar {
     position: fixed;
@@ -487,21 +457,6 @@
     color: var(--color-text-muted);
     margin-bottom: 8px;
     flex-shrink: 0;
-  }
-
-  /* Footer */
-  .sidebar-footer {
-    display: flex;
-    gap: 8px;
-    padding: 12px 16px;
-    flex-shrink: 0;
-  }
-
-  .sidebar-footer .btn {
-    flex: 1;
-    justify-content: center;
-    padding: 7px 12px;
-    font-size: 12px;
   }
 
   /* Sub-agents */

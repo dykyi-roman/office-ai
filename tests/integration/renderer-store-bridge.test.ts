@@ -160,7 +160,9 @@ function makeAgent(overrides: Partial<AgentState> = {}): AgentState {
     currentTask: null,
     tokensIn: 0,
     tokensOut: 0,
+    subAgents: [],
     lastActivity: "2025-01-01T00:00:00.000Z",
+    startedAt: "2025-01-01T00:00:00.000Z",
     source: "cli",
     ...overrides,
   };

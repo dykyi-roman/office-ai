@@ -666,6 +666,7 @@ mod tests {
             tokens_out: 0,
             sub_agents: vec![],
             last_activity: "2026-01-01T00:00:00Z".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
             source: Source::Cli,
         }
     }

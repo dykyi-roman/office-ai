@@ -330,7 +330,7 @@ Agent types:
 | `IdleLocation` | `WaterCooler`, `Kitchen`, `Sofa`, `MeetingRoom`, `StandingDesk`, `Desk`, `Bathroom`, `HrZone`, `Lounge` | `snake_case` |
 | `Source` | `Cli`, `BrowserExtension`, `SdkHook` | `snake_case` |
 | `SubAgentInfo` | `{ id, description }` | `camelCase` |
-| `AgentState` | 14 fields: id, pid, name, model, tier, role, status, idle_location, current_task, tokens_in/out, sub_agents, last_activity, source | `camelCase` |
+| `AgentState` | 15 fields: id, pid, name, model, tier, role, status, idle_location, current_task, tokens_in/out, sub_agents, last_activity, started_at, source | `camelCase` |
 
 Tier inference — `Tier::from_model()` maps model names to tiers:
 - **Expert:** opus, ultra, gpt-4o, o1-*, o3-* (not mini)

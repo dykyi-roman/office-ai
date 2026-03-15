@@ -21,6 +21,12 @@ const PAN_SPEED_PX = 300;
 /** Follow-mode smoothing factor */
 const FOLLOW_SMOOTH = 0.08;
 
+/** Max pointer movement (px) to still count as a click */
+const CLICK_THRESHOLD_PX = 5;
+
+/** Max time (ms) between pointerdown and pointerup for a click */
+const CLICK_TIME_MS = 300;
+
 /** Keyboard key flags */
 interface KeyState {
   ArrowLeft: boolean;
@@ -50,6 +56,12 @@ export class CameraController {
   private panStartY = 0;
   private worldStartX = 0;
   private worldStartY = 0;
+
+  // Click detection
+  private clickStartX = 0;
+  private clickStartY = 0;
+  private clickStartTime = 0;
+  private onCanvasClick: ((screenX: number, screenY: number) => void) | null = null;
 
   // Follow mode
   private followTarget: AgentSprite | null = null;
@@ -175,6 +187,13 @@ export class CameraController {
     return this.currentZoom;
   }
 
+  /**
+   * Set a callback invoked when the user clicks (not drags) on the canvas.
+   */
+  setClickHandler(handler: (screenX: number, screenY: number) => void): void {
+    this.onCanvasClick = handler;
+  }
+
   // ---------------------------------------------------------------------------
   // Private ticker
   // ---------------------------------------------------------------------------
@@ -240,6 +259,9 @@ export class CameraController {
     this.panStartY = e.clientY;
     this.worldStartX = this.world.x;
     this.worldStartY = this.world.y;
+    this.clickStartX = e.clientX;
+    this.clickStartY = e.clientY;
+    this.clickStartTime = Date.now();
     this.followTarget = null;
     (e.currentTarget as HTMLElement | null)?.setPointerCapture(e.pointerId);
   }
@@ -253,8 +275,17 @@ export class CameraController {
     this.clampPosition();
   }
 
-  private handlePointerUp(_e: PointerEvent): void {
+  private handlePointerUp(e: PointerEvent): void {
     this.isPanning = false;
+
+    const dx = e.clientX - this.clickStartX;
+    const dy = e.clientY - this.clickStartY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const elapsed = Date.now() - this.clickStartTime;
+
+    if (dist < CLICK_THRESHOLD_PX && elapsed < CLICK_TIME_MS && this.onCanvasClick) {
+      this.onCanvasClick(e.clientX, e.clientY);
+    }
   }
 
   private handleKeyDown(e: KeyboardEvent): void {

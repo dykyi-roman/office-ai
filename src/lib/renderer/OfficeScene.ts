@@ -21,7 +21,7 @@ import {
   type OfficeLayoutChangedPayload,
 } from "$lib/types/events";
 
-import { isoToScreen, screenToIso } from "./utils/isometric";
+import { isoToScreen } from "./utils/isometric";
 import { Pathfinder } from "./Pathfinder";
 import { DeskManager } from "./DeskManager";
 import { CameraController } from "./CameraController";
@@ -191,6 +191,7 @@ export class OfficeScene {
       container.clientWidth,
       container.clientHeight
     );
+    this.camera.setClickHandler((x, y) => this.handleCanvasClick(x, y));
 
     // Adaptive resize
     const resizeObserver = new ResizeObserver(() => {
@@ -213,8 +214,12 @@ export class OfficeScene {
     // Render the default medium layout
     await this.loadLayoutJson(mediumLayout as unknown as LayoutJson);
 
-    // Subscribe to Tauri events
-    await this.subscribeToEvents();
+    // Subscribe to Tauri events (non-fatal — gracefully skip in dev mode)
+    try {
+      await this.subscribeToEvents();
+    } catch {
+      // Tauri not available (browser dev mode) — events handled via store fallback
+    }
 
     // Load existing agents from backend (supports page reload)
     await this.loadExistingAgents();
@@ -251,22 +256,46 @@ export class OfficeScene {
     }
   }
 
+  /** Max distance (world pixels) from sprite centre to count as a hit */
+  private static readonly HIT_RADIUS = 48;
+
   /**
    * Return the agent ID at the given screen coordinates, or null.
+   * Uses pixel-proximity to handle sprites offset from grid centres.
    */
   getAgentAtPosition(screenX: number, screenY: number): string | null {
-    // Convert screen position to world position accounting for camera transform
     const worldX = (screenX - this.world.x) / this.world.scale.x;
     const worldY = (screenY - this.world.y) / this.world.scale.y;
-    const grid = screenToIso(worldX, worldY);
+
+    let closest: string | null = null;
+    let closestDist = OfficeScene.HIT_RADIUS;
 
     for (const [id, sprite] of this.agentSprites) {
-      const pos = sprite.getGridPosition();
-      if (pos.col === grid.col && pos.row === grid.row) {
-        return id;
+      const dx = sprite.x - worldX;
+      const dy = sprite.y - worldY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closest = id;
       }
     }
-    return null;
+    return closest;
+  }
+
+  /**
+   * Handle a canvas click — select or deselect agent.
+   */
+  private handleCanvasClick(screenX: number, screenY: number): void {
+    const agentId = this.getAgentAtPosition(screenX, screenY);
+    if (agentId !== null) {
+      this.selectAgent(agentId);
+      window.dispatchEvent(
+        new CustomEvent("office:select-agent", { detail: { id: agentId } }),
+      );
+    } else {
+      this.selectAgent(null);
+      window.dispatchEvent(new CustomEvent("office:deselect-agent"));
+    }
   }
 
   /**
@@ -613,7 +642,16 @@ export class OfficeScene {
         this.restoreAgent(agent);
       }
     } catch {
-      // Tauri not available (dev mode) or backend not ready
+      // Tauri not available (dev mode) or backend not ready — load from store
+      try {
+        const { getAllAgents } = await import("$lib/stores/agents.svelte");
+        const storeAgents = getAllAgents();
+        for (const agent of storeAgents) {
+          this.restoreAgent(agent);
+        }
+      } catch {
+        // Store not ready yet
+      }
     }
   }
 

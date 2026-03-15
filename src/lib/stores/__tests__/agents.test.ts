@@ -66,6 +66,7 @@ function makeAgent(overrides: Partial<AgentState> = {}): AgentState {
     tokensOut: 50,
     subAgents: [],
     lastActivity: new Date().toISOString(),
+    startedAt: new Date().toISOString(),
     source: "cli",
     ...overrides,
   };

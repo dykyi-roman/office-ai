@@ -79,6 +79,7 @@ export class NpcManager {
           tokensOut: 0,
           subAgents: [],
           lastActivity: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
           source: "cli",
         },
         sheet

@@ -45,5 +45,6 @@ export interface AgentState {
   tokensOut: number;
   subAgents: SubAgentInfo[];
   lastActivity: string; // ISO 8601
+  startedAt: string; // ISO 8601 — when agent first registered in the office
   source: Source;
 }

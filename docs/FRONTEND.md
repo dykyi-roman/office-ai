@@ -78,7 +78,7 @@ src/
 
 ### `lib/renderer/` — PixiJS Isometric Scene
 
-**`OfficeScene.ts`** — Main scene orchestrator (~600 lines). Initializes the PixiJS `Application`, loads layouts and spritesheets, manages 5 z-ordered layers (floor → furniture → agents → effects → ui). Subscribes to Tauri events to create/update/remove `AgentSprite` instances. Coordinates `DeskManager`, `IdleZoneManager`, `Pathfinder`, `CameraController`, and `NpcManager`. Handles agent location state machine: idle_zone ↔ walking_to_desk ↔ desk ↔ walking_to_idle.
+**`OfficeScene.ts`** — Main scene orchestrator (~600 lines). Initializes the PixiJS `Application`, loads layouts and spritesheets, manages 5 z-ordered layers (floor → furniture → agents → effects → ui). Subscribes to Tauri events to create/update/remove `AgentSprite` instances. Coordinates `DeskManager`, `IdleZoneManager`, `Pathfinder`, `CameraController`, and `NpcManager`. Handles agent location state machine: idle_zone ↔ walking_to_desk ↔ desk ↔ walking_to_idle. Canvas click handling: clicking an agent dispatches `office:select-agent`, clicking empty space dispatches `office:deselect-agent` (closes the sidebar).
 
 **`AgentSprite.ts`** — Animated office-employee character extending `PIXI.Container`. Orchestrates body (AnimatedSprite), name label (Text), status indicator (thinking dots, tool icons), and speech bubble. Handles walking animation along grid paths at 120px/s. Tier-specific visual markers (dot colors: gold/blue/green/grey). Coordinates with `AnimationController` for state-driven animations.
 
@@ -90,7 +90,7 @@ src/
 
 **`IdleZoneManager.ts`** — Assigns idle agents to rest zones (water cooler, kitchen, sofa, etc.) with capacity limits. Rotates agents between zones every 10-30 seconds. Each zone type has an associated animation (drinking, coffee, phone, idle_stand).
 
-**`CameraController.ts`** — Camera pan/zoom/follow controller operating on the PixiJS world container. Supports mouse drag panning, scroll wheel zoom (0.5x-2.0x range with smooth interpolation), keyboard arrows (300px/s), and follow-agent mode with smooth tracking.
+**`CameraController.ts`** — Camera pan/zoom/follow/click controller operating on the PixiJS world container. Supports mouse drag panning, scroll wheel zoom (0.5x-2.0x range with smooth interpolation), keyboard arrows (300px/s), follow-agent mode with smooth tracking, and click-to-select detection (distinguishes clicks from drags via distance < 5px and time < 300ms thresholds).
 
 **`NpcManager.ts`** — Spawns static NPC characters that roam between zones for office ambience. NPCs are not tied to real processes. Each NPC has a home position, tier, and scheduled routines that drive periodic movement between zone types.
 
@@ -120,7 +120,7 @@ src/
 
 **`AgentMetrics.svelte`** — Floating HUD widget (top-right) showing 4 metric rows: IN (tokens in), OUT (tokens out), AGN (active agent count), SUB (sub-agents). Switches between global and per-agent metrics when an agent is selected in the sidebar.
 
-**`AgentSidebar.svelte`** — Slide-in panel (from right) showing detailed information about the selected agent: name, model, tier badge, status, current task, token counts, sub-agent list, and last activity timestamp. Appears when an agent sprite is clicked.
+**`AgentSidebar.svelte`** — Slide-in panel (from right) showing detailed information about the selected agent: name, model, tier badge, status, current task, token counts, session duration (from `startedAt`), PID, source, sub-agent list, and activity log. Appears when an agent sprite is clicked via pixel-proximity hit detection in the renderer. Closes via X button, Escape key, or `office:deselect-agent` DOM event (dispatched by the renderer when clicking empty canvas space). Clicking a different agent while the sidebar is open seamlessly switches to the new agent without closing first.
 
 **`StatusBar.svelte`** — Fixed bottom bar aggregating agents by tier. Shows tier badges with agent counts (e.g., "Expert: 2, Senior: 3"). Clicking a tier badge filters the view.
 
@@ -346,7 +346,9 @@ interface AnimatableSprite {
 - Middle button + drag → pan
 - Arrow keys → pan (disables follow)
 - +/- → zoom
+- Click (< 5px movement, < 300ms) → select agent via pixel-proximity hit detection (48px radius)
 - `follow(sprite)` → smooth agent tracking
+- `setClickHandler(handler)` → register click callback for agent selection
 
 ### NpcManager — Background NPCs
 

@@ -121,6 +121,7 @@ pub struct AgentState {
     pub tokens_out: u64,
     pub sub_agents: Vec<SubAgentInfo>,
     pub last_activity: String, // ISO 8601
+    pub started_at: String,    // ISO 8601
     pub source: Source,
 }
 
