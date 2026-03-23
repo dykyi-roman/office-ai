@@ -313,18 +313,21 @@ Tokens are summed on each ParsedEvent regardless of FSM debounce. Claude: `token
 
 ### 4.11. Sub-Agent Tracking
 
-Tracking nested agents (Task/Agent tools in Claude Code):
+Tracking nested agents across all supported CLIs:
+
+```
+Auto-idle guard: if subAgents is not empty → auto-idle timer is skipped
+Cleanup:    on transition to Idle/Thinking/TaskComplete/Error → agent.subAgents = []
+```
+
+**Claude Code sub-agents:**
 
 ```
 Spawn:      tool_use block with name="Task" or name="Agent" → add to agent.subAgents
 Completion: tool_result with matching tool_use_id → remove from agent.subAgents
-Auto-idle guard: if subAgents is not empty → auto-idle timer is skipped
-Cleanup:    on transition to Idle → agent.subAgents = []
 ```
 
-**Background (async) sub-agents:**
-
-Claude Code launches background agents via the `Agent` tool with `run_in_background: true`. Their lifecycle differs from foreground agents:
+Background (async) sub-agents launched via `run_in_background: true`:
 
 ```
 1. Launch:     assistant → tool_use (name="Agent") → add to subAgents
@@ -334,11 +337,25 @@ Claude Code launches background agents via the `Agent` tool with `run_in_backgro
                → extract <tool-use-id> → remove from subAgents
 ```
 
-**Implementation in `claude_code_parser.rs`:**
+**Codex CLI named sub-agents (v0.116+):**
 
-- `is_async_launch_result()` — identifies `tool_result` blocks with text "Async agent launched..." so that `extract_completed_sub_agent_ids()` skips them
-- `extract_task_notification_completion()` — parses XML `<task-notification>` from `queue-operation` entries, extracts `tool-use-id` of completed agents
-- `LogEntry.content` — field for accessing raw content of `queue-operation` (stored at top-level JSON, not in `message.content`)
+```
+1. Spawn:      function_call name="spawn_agent" → preliminary entry (id=call_id)
+2. Ack:        function_call_output {agent_id, nickname} → upgrade to named entry
+               (id=agent_uuid, description="Nickname: prompt")
+3. Wait:       function_call name="wait_agent" → no new sub-agents (sync primitive)
+4. Completion: function_call_output {status: {uuid: {completed: result}}}
+               → remove completed sub-agents
+```
+
+Each named sub-agent also produces its own rollout log file with `agent_nickname` and `forked_from_id` in `session_meta`, which the log watcher picks up as a separate agent.
+
+Codex also supports parallel bash sub-agents via `exec_command` with `bash -lc '(cmd1) & (cmd2) & wait'` pattern.
+
+**Implementation files:**
+
+- `claude_code_parser.rs` — `is_async_launch_result()`, `extract_task_notification_completion()`, `extract_sub_agents()`, `extract_completed_sub_agent_ids()`
+- `codex_cli_parser.rs` — `spawn_agent`/`wait_agent` handling in `handle_response_item()`, `parse_parallel_bash_commands()`
 
 ### 4.12. Sound Synthesis
 

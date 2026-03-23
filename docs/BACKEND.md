@@ -645,7 +645,11 @@ tokens_out = output_tokens
 
 **Agent ID format:** `log-{session_uuid_prefix_8}--codex` — derived from the session UUID in the rollout filename.
 
-**Sub-agent tracking:** Tracks `function_call` → `function_call_output` lifecycles via `call_id`. Each `function_call` event creates one or more `SubAgentInfo` entries stored in `active_calls` (keyed by `call_id`). When `function_call_output` arrives with a matching `call_id`, all entries are removed and returned as `completed_sub_agent_ids`. For `exec_command` calls with parallel bash syntax (e.g. `bash -lc '(cmd1) & (cmd2) & wait'`), the parser detects individual subshell commands and creates separate sub-agent entries (IDs: `{call_id}:0`, `{call_id}:1`, etc.) with cleaned command descriptions. Non-parallel `exec_command` calls create a single sub-agent with the command as the description.
+**Sub-agent tracking:** Two mechanisms:
+
+1. **Named sub-agents (v0.116+):** `spawn_agent` function calls trigger two-phase creation. The initial `function_call` creates a preliminary entry (id=call_id, description="spawning: {prompt}"). The `function_call_output` ack (`{agent_id, nickname}`) upgrades it to a named entry (id=agent_uuid, description="{Nickname}: {prompt}"). `wait_agent` function calls are synchronization primitives — they don't create sub-agents. Their `function_call_output` (with `{status: {uuid: {completed: result}}}`) triggers completion of all waited sub-agents. Each named sub-agent also gets its own rollout log file with `agent_nickname` and `forked_from_id` in `session_meta`.
+
+2. **Parallel bash sub-agents:** For `exec_command` calls with parallel bash syntax (e.g. `bash -lc '(cmd1) & (cmd2) & wait'`), the parser detects individual subshell commands and creates separate sub-agent entries (IDs: `{call_id}:0`, `{call_id}:1`, etc.) with cleaned command descriptions. `function_call_output` with matching `call_id` completes all entries atomically. Non-parallel `exec_command` calls create a single sub-agent with the command as the description.
 
 ### Parser Capabilities Comparison
 
@@ -661,8 +665,8 @@ Not all parsers extract the same data. This table documents current capabilities
 | **Status: Error** | `type="error"` | `type="info"` with "cancelled" | `type="error"` / `exec_result` with `exit_code!=0` | Gemini only detects user cancellation |
 | **Model extraction** | `message.model` (priority) or top-level `model` | Top-level `model` field | Cached from session metadata (stateful) | Same |
 | **Token counting** | `message.usage` (`input + cache_read + cache_creation`) | `tokens.input` / `tokens.output` (`cached` parsed but unused) | `usage.input_tokens` / `usage.output_tokens` (cumulative in parser state) | Claude includes cache tokens in sum; Gemini does not |
-| **Sub-agent detection** | `tool_use` blocks with `name="Task"` or `name="Agent"` | **Not supported** (`sub_agents` always empty) | `function_call` → sub-agent per call; `exec_command` with parallel bash → multiple sub-agents | Codex tracks function_call/function_call_output lifecycle |
-| **Sub-agent completion** | `tool_result` blocks + `queue-operation` notifications | **Not supported** (`completed_sub_agent_ids` always empty) | `function_call_output` with matching `call_id` completes all sub-agents for that call | Codex completes all sub-agents atomically per call_id |
+| **Sub-agent detection** | `tool_use` blocks with `name="Task"` or `name="Agent"` | **Not supported** (`sub_agents` always empty) | Named: `spawn_agent` two-phase (call+ack); Parallel: `exec_command` with bash subshells | Codex named sub-agents carry nicknames (Darwin, Newton, etc.) |
+| **Sub-agent completion** | `tool_result` blocks + `queue-operation` notifications | **Not supported** (`completed_sub_agent_ids` always empty) | Named: `wait_agent` output marks all waited agents as completed; Parallel: `function_call_output` with matching `call_id` | Codex named sub-agents completed via wait_agent sync primitive |
 | **Async agent detection** | Filters "Async agent launched" results | **Not supported** | **Not supported** | N/A for Gemini/Codex |
 | **CWD (working directory)** | Extracted from JSONL `cwd` field | **Always `None`** | Cached from session metadata (stateful) | Gemini relies on model-hint fallback for agent-process correlation (step 4 in `resolve_agent_id`) |
 | **Meta message filtering** | `isMeta: true` → skip | **No equivalent** | **No equivalent** | N/A |

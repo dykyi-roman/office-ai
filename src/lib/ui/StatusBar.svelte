@@ -414,6 +414,7 @@
 
   /* Sub-agents tooltip */
   .sub-tooltip {
+    max-width: 360px;
     max-height: 240px;
     overflow-y: auto;
   }
@@ -425,5 +426,8 @@
   .sub-name {
     color: var(--color-text-secondary);
     font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

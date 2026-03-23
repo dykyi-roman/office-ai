@@ -1,7 +1,7 @@
 // Codex CLI JSONL log parser
 // Maps real Codex CLI log events to AgentStatus.
 //
-// Actual JSONL format (Codex CLI v0.114+):
+// Actual JSONL format (Codex CLI v0.114+, subagents v0.116+):
 //   Top-level types: session_meta, event_msg, response_item, turn_context
 //
 //   event_msg subtypes (payload.type):
@@ -14,7 +14,9 @@
 //
 //   response_item subtypes (payload.type):
 //     function_call        → ToolUse
-//     function_call_output → ToolUse
+//       name="spawn_agent" → spawns named sub-agent (two-phase: call creates preliminary, ack upgrades)
+//       name="wait_agent"  → waits for sub-agents (completion on output)
+//     function_call_output → ToolUse (or sub-agent ack/completion)
 //     message role=assistant → Responding
 //     reasoning            → (skip, covered by agent_reasoning)
 //     message role=developer/user → (skip, system context)
@@ -47,6 +49,15 @@ struct ParserState {
     /// Active function calls: call_id → sub-agent entries.
     /// Tracks function_call → function_call_output lifecycle.
     active_calls: HashMap<String, Vec<SubAgentInfo>>,
+    /// Maps spawn_agent call_id → original prompt message (pending ack).
+    /// Two-phase creation: function_call stores here, function_call_output upgrades.
+    pending_spawns: HashMap<String, String>,
+    /// Tracks wait_agent call_ids (so function_call_output can trigger completion).
+    pending_waits: HashMap<String, ()>,
+    /// Maps agent UUID → (nickname, description) for spawned agents awaiting wait_agent completion.
+    spawned_agents: HashMap<String, (String, String)>,
+    /// Nickname from session_meta (if this session is itself a subagent).
+    agent_nickname: Option<String>,
 }
 
 /// Codex CLI JSONL log parser implementing the AgentLogParser trait.
@@ -66,6 +77,10 @@ impl CodexCliParser {
                 snapshot_in: 0,
                 snapshot_out: 0,
                 active_calls: HashMap::new(),
+                pending_spawns: HashMap::new(),
+                pending_waits: HashMap::new(),
+                spawned_agents: HashMap::new(),
+                agent_nickname: None,
             }),
         }
     }
@@ -174,20 +189,70 @@ impl CodexCliParser {
                 let task = Some(format!("tool: {tool_name}"));
 
                 // Build sub-agent entries for this call
-                let sub_entries = if tool_name == "exec_command" {
+                let sub_entries = if tool_name == "spawn_agent" {
+                    // Named sub-agent spawning (Codex v0.116+).
+                    // Two-phase: this call creates a preliminary entry,
+                    // the ack (function_call_output) upgrades it with real UUID + nickname.
+                    let args = parse_function_call_args(payload);
+                    let message = args
+                        .as_ref()
+                        .and_then(|a| a.get("message").and_then(|m| m.as_str()))
+                        .map(|s| truncate_text(s, 150))
+                        .unwrap_or_else(|| "sub-agent task".to_string());
+
+                    let mut state = self.state.lock().unwrap();
+                    state
+                        .pending_spawns
+                        .insert(call_id.clone(), message.clone());
+
+                    let sub = SubAgentInfo {
+                        id: call_id.clone(),
+                        description: format!("spawning: {message}"),
+                    };
+                    state
+                        .active_calls
+                        .insert(call_id.clone(), vec![sub.clone()]);
+
+                    return Some(ParsedEvent {
+                        status: Status::ToolUse,
+                        model: state.model.clone(),
+                        current_task: task,
+                        tokens_in: None,
+                        tokens_out: None,
+                        sub_agents: vec![sub],
+                        completed_sub_agent_ids: vec![],
+                        timestamp: timestamp.to_string(),
+                        cwd: state.cwd.clone(),
+                    });
+                } else if tool_name == "wait_agent" {
+                    // Synchronization primitive — no new sub-agents.
+                    // Track call_id in pending_waits so we can handle its output for completion.
+                    let mut state = self.state.lock().unwrap();
+                    state.pending_waits.insert(call_id, ());
+
+                    return Some(ParsedEvent {
+                        status: Status::ToolUse,
+                        model: state.model.clone(),
+                        current_task: Some("waiting for sub-agents".to_string()),
+                        tokens_in: None,
+                        tokens_out: None,
+                        sub_agents: vec![],
+                        completed_sub_agent_ids: vec![],
+                        timestamp: timestamp.to_string(),
+                        cwd: state.cwd.clone(),
+                    });
+                } else if tool_name == "exec_command" {
                     // Try to parse parallel bash commands from arguments
-                    let cmd = payload
-                        .get("arguments")
-                        .and_then(|a| {
-                            // arguments may be a JSON string or an object
-                            if let Some(s) = a.as_str() {
-                                serde_json::from_str::<Value>(s)
-                                    .ok()
-                                    .and_then(|v| v.get("cmd").and_then(|c| c.as_str()).map(String::from))
-                            } else {
-                                a.get("cmd").and_then(|c| c.as_str()).map(String::from)
-                            }
-                        });
+                    let cmd = payload.get("arguments").and_then(|a| {
+                        // arguments may be a JSON string or an object
+                        if let Some(s) = a.as_str() {
+                            serde_json::from_str::<Value>(s).ok().and_then(|v| {
+                                v.get("cmd").and_then(|c| c.as_str()).map(String::from)
+                            })
+                        } else {
+                            a.get("cmd").and_then(|c| c.as_str()).map(String::from)
+                        }
+                    });
 
                     if let Some(ref cmd_str) = cmd {
                         if let Some(commands) = parse_parallel_bash_commands(cmd_str) {
@@ -243,8 +308,91 @@ impl CodexCliParser {
                     .get("call_id")
                     .and_then(|c| c.as_str())
                     .unwrap_or("");
+                let output_str = payload.get("output").and_then(|o| o.as_str()).unwrap_or("");
 
                 let mut state = self.state.lock().unwrap();
+
+                // Check: spawn_agent ack — upgrade preliminary sub-agent to named one
+                if let Some(original_message) = state.pending_spawns.remove(call_id) {
+                    if let Ok(ack) = serde_json::from_str::<Value>(output_str) {
+                        let agent_uuid = ack
+                            .get("agent_id")
+                            .and_then(|a| a.as_str())
+                            .unwrap_or(call_id)
+                            .to_string();
+                        let nickname = ack
+                            .get("nickname")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("agent")
+                            .to_string();
+
+                        // Track for wait_agent completion
+                        state.spawned_agents.insert(
+                            agent_uuid.clone(),
+                            (nickname.clone(), original_message.clone()),
+                        );
+
+                        // Remove preliminary entry (by call_id)
+                        let completed_ids: Vec<String> = state
+                            .active_calls
+                            .remove(call_id)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|s| s.id)
+                            .collect();
+
+                        // Create upgraded sub-agent with real UUID + nickname
+                        let new_sub = SubAgentInfo {
+                            id: agent_uuid,
+                            description: format!(
+                                "{}: {}",
+                                nickname,
+                                truncate_text(&original_message, 120)
+                            ),
+                        };
+
+                        return Some(ParsedEvent {
+                            status: Status::ToolUse,
+                            model: state.model.clone(),
+                            current_task: Some(format!("spawned {nickname}")),
+                            tokens_in: None,
+                            tokens_out: None,
+                            sub_agents: vec![new_sub],
+                            completed_sub_agent_ids: completed_ids,
+                            timestamp: timestamp.to_string(),
+                            cwd: state.cwd.clone(),
+                        });
+                    }
+                }
+
+                // Check: wait_agent output — complete all waited sub-agents
+                if !call_id.is_empty() && state.pending_waits.remove(call_id).is_some() {
+                    if let Ok(result) = serde_json::from_str::<Value>(output_str) {
+                        if let Some(status_map) = result.get("status").and_then(|s| s.as_object()) {
+                            let completed_ids: Vec<String> = status_map
+                                .keys()
+                                .filter(|id| state.spawned_agents.remove(*id).is_some())
+                                .cloned()
+                                .collect();
+
+                            if !completed_ids.is_empty() {
+                                return Some(ParsedEvent {
+                                    status: Status::ToolUse,
+                                    model: state.model.clone(),
+                                    current_task: Some("sub-agents completed".to_string()),
+                                    tokens_in: None,
+                                    tokens_out: None,
+                                    sub_agents: vec![],
+                                    completed_sub_agent_ids: completed_ids,
+                                    timestamp: timestamp.to_string(),
+                                    cwd: state.cwd.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Default: regular function_call_output completion
                 let completed_ids = if !call_id.is_empty() {
                     state
                         .active_calls
@@ -381,9 +529,14 @@ impl AgentLogParser for CodexCliParser {
 
         match top_type {
             "session_meta" => {
+                let mut state = self.state.lock().unwrap();
                 // Cache CWD from payload.cwd
                 if let Some(cwd) = payload.get("cwd").and_then(|c| c.as_str()) {
-                    self.state.lock().unwrap().cwd = Some(cwd.to_string());
+                    state.cwd = Some(cwd.to_string());
+                }
+                // Cache nickname if this is a subagent session (v0.116+)
+                if let Some(nickname) = payload.get("agent_nickname").and_then(|n| n.as_str()) {
+                    state.agent_nickname = Some(nickname.to_string());
                 }
                 None
             }
@@ -475,6 +628,18 @@ impl AgentLogParser for CodexCliParser {
     }
 }
 
+/// Parse function_call arguments from payload.
+/// Arguments may be a JSON string or an object.
+fn parse_function_call_args(payload: &Value) -> Option<Value> {
+    payload.get("arguments").and_then(|a| {
+        if let Some(s) = a.as_str() {
+            serde_json::from_str::<Value>(s).ok()
+        } else {
+            Some(a.clone())
+        }
+    })
+}
+
 /// Parse parallel bash commands from a shell command string.
 ///
 /// Detects the pattern: `bash -lc '(cmd1) & (cmd2) & ... & wait'`
@@ -491,8 +656,7 @@ fn parse_parallel_bash_commands(cmd: &str) -> Option<Vec<String>> {
             trimmed
                 .strip_prefix("bash")
                 .and_then(|s| s.trim_start().strip_prefix("-c"))
-        })
-    {
+        }) {
         let rest = rest.trim();
         // Strip surrounding quotes
         if (rest.starts_with('\'') && rest.ends_with('\''))
@@ -507,7 +671,12 @@ fn parse_parallel_bash_commands(cmd: &str) -> Option<Vec<String>> {
     };
 
     // Must end with `& wait` (the parallel join)
-    let body = inner.trim().strip_suffix("wait")?.trim().strip_suffix('&')?.trim();
+    let body = inner
+        .trim()
+        .strip_suffix("wait")?
+        .trim()
+        .strip_suffix('&')?
+        .trim();
 
     // Must contain at least one subshell pattern: `(...)`
     if !body.contains('(') {
@@ -1002,7 +1171,10 @@ mod tests {
     fn test_parse_parallel_bash_with_redirects() {
         let cmd = "bash -lc '(npm run test > logs/job1.log 2>&1) & (cargo test > logs/job2.log 2>&1) & (find src -type f | wc -l > logs/job3.log 2>&1) & wait'";
         let cmds = parse_parallel_bash_commands(cmd).unwrap();
-        assert_eq!(cmds, vec!["npm run test", "cargo test", "find src -type f | wc -l"]);
+        assert_eq!(
+            cmds,
+            vec!["npm run test", "cargo test", "find src -type f | wc -l"]
+        );
     }
 
     #[test]
@@ -1142,5 +1314,185 @@ mod tests {
         let line = r#"{"timestamp":"2026-03-12T07:32:00.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_unknown","output":"?"}}"#;
         let event = parser.parse_line(line).unwrap();
         assert!(event.completed_sub_agent_ids.is_empty());
+    }
+
+    // --- Named sub-agent tests (Codex v0.116+) ---
+
+    const SPAWN_AGENT_CALL: &str = r#"{"timestamp":"2026-03-23T08:26:42.144Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"agent_type\":\"default\",\"fork_context\":true,\"model\":\"gpt-5.4-mini\",\"reasoning_effort\":\"low\",\"message\":\"Check parallel. Reply: agent 1 ok.\"}","call_id":"call_spawn1"}}"#;
+
+    const SPAWN_AGENT_ACK: &str = r#"{"timestamp":"2026-03-23T08:26:42.179Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn1","output":"{\"agent_id\":\"019d19cd-aa69-7732-b4d5-2ea8be76dd33\",\"nickname\":\"Darwin\"}"}}"#;
+
+    const SPAWN_AGENT_ACK_NO_NICKNAME: &str = r#"{"timestamp":"2026-03-23T08:26:42.179Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn1","output":"{\"agent_id\":\"019d19cd-aa69-7732-b4d5-2ea8be76dd33\"}"}}"#;
+
+    const WAIT_AGENT_CALL: &str = r#"{"timestamp":"2026-03-23T08:26:44.992Z","type":"response_item","payload":{"type":"function_call","name":"wait_agent","arguments":"{\"ids\":[\"019d19cd-aa69-7732-b4d5-2ea8be76dd33\"],\"timeout_ms\":30000}","call_id":"call_wait1"}}"#;
+
+    const WAIT_AGENT_OUTPUT: &str = r#"{"timestamp":"2026-03-23T08:26:45.029Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_wait1","output":"{\"status\":{\"019d19cd-aa69-7732-b4d5-2ea8be76dd33\":{\"completed\":\"agent 1 ok\"}},\"timed_out\":false}"}}"#;
+
+    const WAIT_AGENT_OUTPUT_TIMEOUT: &str = r#"{"timestamp":"2026-03-23T08:26:75.029Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_wait1","output":"{\"status\":{\"019d19cd-aa69-7732-b4d5-2ea8be76dd33\":{\"completed\":\"agent 1 ok\"}},\"timed_out\":true}"}}"#;
+
+    const SUBAGENT_SESSION_META: &str = r#"{"timestamp":"2026-03-23T08:26:42.177Z","type":"session_meta","payload":{"id":"019d19cd-aa69-7732-b4d5-2ea8be76dd33","forked_from_id":"019d19cd-4b61-7400-aace-b33ed64810a5","cwd":"/Users/user/projects/myapp","agent_nickname":"Darwin","agent_role":"default","cli_version":"0.116.0"}}"#;
+
+    #[test]
+    fn test_spawn_agent_creates_preliminary_sub_agent() {
+        let parser = CodexCliParser::new();
+        let event = parser.parse_line(SPAWN_AGENT_CALL).unwrap();
+        assert_eq!(event.status, Status::ToolUse);
+        assert_eq!(event.sub_agents.len(), 1);
+        assert_eq!(event.sub_agents[0].id, "call_spawn1");
+        assert!(event.sub_agents[0].description.starts_with("spawning: "));
+        assert!(event.sub_agents[0].description.contains("Check parallel"));
+    }
+
+    #[test]
+    fn test_spawn_agent_ack_upgrades_to_named_sub_agent() {
+        let parser = CodexCliParser::new();
+        // Phase 1: spawn creates preliminary
+        parser.parse_line(SPAWN_AGENT_CALL).unwrap();
+        // Phase 2: ack upgrades to named
+        let event = parser.parse_line(SPAWN_AGENT_ACK).unwrap();
+        assert_eq!(event.status, Status::ToolUse);
+        // Preliminary entry removed
+        assert_eq!(event.completed_sub_agent_ids, vec!["call_spawn1"]);
+        // Upgraded entry added
+        assert_eq!(event.sub_agents.len(), 1);
+        assert_eq!(
+            event.sub_agents[0].id,
+            "019d19cd-aa69-7732-b4d5-2ea8be76dd33"
+        );
+        assert!(event.sub_agents[0].description.starts_with("Darwin: "));
+        assert_eq!(event.current_task, Some("spawned Darwin".to_string()));
+    }
+
+    #[test]
+    fn test_spawn_agent_ack_without_nickname_uses_default() {
+        let parser = CodexCliParser::new();
+        parser.parse_line(SPAWN_AGENT_CALL).unwrap();
+        let event = parser.parse_line(SPAWN_AGENT_ACK_NO_NICKNAME).unwrap();
+        assert_eq!(event.sub_agents.len(), 1);
+        assert!(event.sub_agents[0].description.starts_with("agent: "));
+    }
+
+    #[test]
+    fn test_wait_agent_does_not_create_sub_agents() {
+        let parser = CodexCliParser::new();
+        // Spawn + ack first
+        parser.parse_line(SPAWN_AGENT_CALL).unwrap();
+        parser.parse_line(SPAWN_AGENT_ACK).unwrap();
+        // wait_agent should not create new sub-agents
+        let event = parser.parse_line(WAIT_AGENT_CALL).unwrap();
+        assert_eq!(event.status, Status::ToolUse);
+        assert!(event.sub_agents.is_empty());
+        assert_eq!(
+            event.current_task,
+            Some("waiting for sub-agents".to_string())
+        );
+    }
+
+    #[test]
+    fn test_wait_agent_output_completes_spawned_agents() {
+        let parser = CodexCliParser::new();
+        // Spawn + ack
+        parser.parse_line(SPAWN_AGENT_CALL).unwrap();
+        parser.parse_line(SPAWN_AGENT_ACK).unwrap();
+        // Wait
+        parser.parse_line(WAIT_AGENT_CALL).unwrap();
+        // Wait output completes the agent
+        let event = parser.parse_line(WAIT_AGENT_OUTPUT).unwrap();
+        assert_eq!(event.status, Status::ToolUse);
+        assert_eq!(
+            event.completed_sub_agent_ids,
+            vec!["019d19cd-aa69-7732-b4d5-2ea8be76dd33"]
+        );
+        assert_eq!(event.current_task, Some("sub-agents completed".to_string()));
+        // spawned_agents map should be empty now
+        let state = parser.state.lock().unwrap();
+        assert!(state.spawned_agents.is_empty());
+    }
+
+    #[test]
+    fn test_full_subagent_lifecycle_three_agents() {
+        let parser = CodexCliParser::new();
+
+        // Spawn 3 agents
+        let spawn2 = r#"{"timestamp":"2026-03-23T08:26:42.144Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"agent 2 task\"}","call_id":"call_spawn2"}}"#;
+        let spawn3 = r#"{"timestamp":"2026-03-23T08:26:42.173Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"message\":\"agent 3 task\"}","call_id":"call_spawn3"}}"#;
+
+        parser.parse_line(SPAWN_AGENT_CALL).unwrap();
+        parser.parse_line(spawn2).unwrap();
+        parser.parse_line(spawn3).unwrap();
+
+        // Ack all 3
+        parser.parse_line(SPAWN_AGENT_ACK).unwrap(); // Darwin
+        let ack2 = r#"{"timestamp":"2026-03-23T08:26:42.210Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn2","output":"{\"agent_id\":\"uuid-newton\",\"nickname\":\"Newton\"}"}}"#;
+        let ack3 = r#"{"timestamp":"2026-03-23T08:26:42.240Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn3","output":"{\"agent_id\":\"uuid-confucius\",\"nickname\":\"Confucius\"}"}}"#;
+        parser.parse_line(ack2).unwrap();
+        parser.parse_line(ack3).unwrap();
+
+        // Verify 3 spawned agents tracked
+        {
+            let state = parser.state.lock().unwrap();
+            assert_eq!(state.spawned_agents.len(), 3);
+        }
+
+        // Wait for all
+        let wait_all = r#"{"timestamp":"2026-03-23T08:26:44.992Z","type":"response_item","payload":{"type":"function_call","name":"wait_agent","arguments":"{\"ids\":[\"019d19cd-aa69-7732-b4d5-2ea8be76dd33\",\"uuid-newton\",\"uuid-confucius\"]}","call_id":"call_wait_all"}}"#;
+        parser.parse_line(wait_all).unwrap();
+
+        // Complete all
+        let wait_output = r#"{"timestamp":"2026-03-23T08:26:45.029Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_wait_all","output":"{\"status\":{\"019d19cd-aa69-7732-b4d5-2ea8be76dd33\":{\"completed\":\"ok1\"},\"uuid-newton\":{\"completed\":\"ok2\"},\"uuid-confucius\":{\"completed\":\"ok3\"}},\"timed_out\":false}"}}"#;
+        let event = parser.parse_line(wait_output).unwrap();
+        assert_eq!(event.completed_sub_agent_ids.len(), 3);
+
+        let state = parser.state.lock().unwrap();
+        assert!(state.spawned_agents.is_empty());
+    }
+
+    #[test]
+    fn test_subagent_session_meta_caches_nickname() {
+        let parser = CodexCliParser::new();
+        parser.parse_line(SUBAGENT_SESSION_META);
+        let state = parser.state.lock().unwrap();
+        assert_eq!(state.agent_nickname.as_deref(), Some("Darwin"));
+        assert_eq!(state.cwd.as_deref(), Some("/Users/user/projects/myapp"));
+    }
+
+    #[test]
+    fn test_spawn_and_exec_command_coexist() {
+        let parser = CodexCliParser::new();
+
+        // Spawn a named sub-agent
+        parser.parse_line(SPAWN_AGENT_CALL).unwrap();
+        parser.parse_line(SPAWN_AGENT_ACK).unwrap();
+
+        // Also run an exec_command (regular sub-agent)
+        let exec_call = r#"{"timestamp":"2026-03-23T08:26:43.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"npm test\"}","call_id":"call_exec"}}"#;
+        let exec_event = parser.parse_line(exec_call).unwrap();
+        assert_eq!(exec_event.sub_agents.len(), 1);
+        assert_eq!(exec_event.sub_agents[0].id, "call_exec");
+
+        // Both types tracked independently
+        {
+            let state = parser.state.lock().unwrap();
+            assert!(state
+                .spawned_agents
+                .contains_key("019d19cd-aa69-7732-b4d5-2ea8be76dd33"));
+            assert!(state.active_calls.contains_key("call_exec"));
+        }
+    }
+
+    #[test]
+    fn test_wait_agent_with_timeout() {
+        let parser = CodexCliParser::new();
+        // Spawn + ack
+        parser.parse_line(SPAWN_AGENT_CALL).unwrap();
+        parser.parse_line(SPAWN_AGENT_ACK).unwrap();
+        // Wait
+        parser.parse_line(WAIT_AGENT_CALL).unwrap();
+        // Wait output with timed_out=true still completes
+        let event = parser.parse_line(WAIT_AGENT_OUTPUT_TIMEOUT).unwrap();
+        assert_eq!(
+            event.completed_sub_agent_ids,
+            vec!["019d19cd-aa69-7732-b4d5-2ea8be76dd33"]
+        );
     }
 }
