@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Auto-generated wrapper for OfficeAI native messaging host
+exec "/opt/homebrew/bin/node" "/Users/dykyi/projects/ai-office/extension/native-messaging/host.cjs" "$@"

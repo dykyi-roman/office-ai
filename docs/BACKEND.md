@@ -274,6 +274,8 @@ Badge management:
 - `update_badge(handle, active_count)` — sets dock/taskbar badge with active agent count
 - `badge_count()` — converts count to `Option<i64>` (0 → `None` to remove badge)
 
+**`extension_server.rs`** — Minimal HTTP/1.1 server for Chrome extension integration. Uses `tokio::net::TcpListener` (no external HTTP crate). Handles `POST /extension` with JSON body containing `agent:state`, `agent:lost`, or `heartbeat` messages from the native messaging host. Enforces `maxAgents`, re-derives tier via `Tier::from_model()`. Binds to `127.0.0.1:{extension_port}` (default 7842).
+
 **`commands.rs`** — Tauri invoke handlers exposed to the frontend.
 
 Commands (JavaScript → Rust):

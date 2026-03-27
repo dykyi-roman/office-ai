@@ -30,12 +30,12 @@ OfficeAI is a Tauri v2 desktop application that visualizes running AI agents (Cl
           │                                    │
 ┌─────────┼────────────────────────────────────┼──────────────────────────┐
 │         ▼                                      ▼                        │
-│  ┌───────────────┐                  ┌────────────────────┐              │
-│  │Process Scanner│                  │   Log Watcher      │              │
-│  │  (every 2s)   │                  │ (500ms, JSONL+JSON)│              │
-│  └──────┬────────┘                  └────────┬───────────┘              │
-│         │ ScannerEvent                       │ RawLogLine               │
-│         ▼                                    ▼                          │
+│  ┌───────────────┐  ┌────────────────────┐  ┌──────────────────┐        │
+│  │Process Scanner│  │   Log Watcher      │  │ Extension Server │        │
+│  │  (every 2s)   │  │ (500ms, JSONL+JSON)│  │ (HTTP :7842)     │        │
+│  └──────┬────────┘  └────────┬───────────┘  └────────┬─────────┘        │
+│         │ ScannerEvent       │ RawLogLine            │ POST /extension  │
+│         ▼                    ▼                        ▼                 │
 │  ┌──────────────┐     ┌───────────────┐ ┌──────────────────┐            │
 │  │   Scanner    │     │ Parser Reg.   │ │ State Classifier │            │
 │  │   Consumer   │     │(Cld+Gem+Cdx)  │→│  (FSM 300ms)     │            │

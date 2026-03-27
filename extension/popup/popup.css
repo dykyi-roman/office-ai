@@ -1,0 +1,463 @@
+/* ============================================================================
+   OfficeAI — Popup stylesheet
+   Dark theme, 300x400px fixed dimensions.
+   ============================================================================ */
+
+/* --------------------------------------------------------------------------
+   CSS custom properties (design tokens)
+   -------------------------------------------------------------------------- */
+:root {
+  /* Brand colors */
+  --color-bg:           #0a0a14;
+  --color-bg-surface:   #12121f;
+  --color-bg-elevated:  #1a1a2e;
+  --color-bg-hover:     #20203a;
+
+  --color-border:       #2a2a45;
+  --color-border-light: #33334d;
+
+  --color-text:         #e0e0e0;
+  --color-text-muted:   #8888aa;
+  --color-text-faint:   #555577;
+
+  --color-accent:       #4fc3f7;
+  --color-accent-dim:   rgba(79, 195, 247, 0.15);
+
+  /* Status colors */
+  --color-status-idle:          #555577;
+  --color-status-thinking:      #ffd54f;
+  --color-status-responding:    #4fc3f7;
+  --color-status-tool-use:      #ce93d8;
+  --color-status-task-complete: #81c784;
+  --color-status-error:         #ef5350;
+  --color-status-offline:       #555577;
+  --color-status-collaboration: #ffb74d;
+  --color-status-walking:       #80cbc4;
+
+  /* Connection indicator */
+  --color-connected:    #81c784;
+  --color-disconnected: #ef5350;
+  --color-connecting:   #ffd54f;
+
+  /* Platform brand tints */
+  --color-platform-chatgpt: #10a37f;
+  --color-platform-gemini:  #4285f4;
+  --color-platform-claude:  #d97757;
+
+  /* Typography */
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-size-xs:   10px;
+  --font-size-sm:   11px;
+  --font-size-base: 12px;
+  --font-size-md:   13px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+}
+
+/* --------------------------------------------------------------------------
+   Reset & base
+   -------------------------------------------------------------------------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 300px;
+  min-height: 400px;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+ul {
+  list-style: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+/* --------------------------------------------------------------------------
+   Layout
+   -------------------------------------------------------------------------- */
+body {
+  display: flex;
+  flex-direction: column;
+  height: 400px;
+}
+
+.main {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+.main::-webkit-scrollbar {
+  width: 4px;
+}
+
+.main::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Header
+   -------------------------------------------------------------------------- */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-bg-surface);
+  border-bottom: 1px solid var(--color-border);
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.header__logo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.header__icon {
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  image-rendering: -webkit-optimize-contrast;
+}
+
+.header__title {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Connection status dot
+   -------------------------------------------------------------------------- */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--color-connecting);
+  transition: background-color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.status-dot.is-connected {
+  background-color: var(--color-connected);
+  box-shadow: 0 0 0 2px rgba(129, 199, 132, 0.25);
+}
+
+.status-dot.is-disconnected {
+  background-color: var(--color-disconnected);
+  animation: pulse-error 2s ease-in-out infinite;
+}
+
+.status-dot.is-connecting {
+  background-color: var(--color-connecting);
+  animation: pulse-warning 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-error {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+@keyframes pulse-warning {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+.status-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   Section
+   -------------------------------------------------------------------------- */
+.section {
+  padding: var(--space-2) var(--space-3);
+}
+
+.section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.section__title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.agent-count {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  padding: 1px 6px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   Agent list
+   -------------------------------------------------------------------------- */
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.agent-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background-color: var(--color-bg-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  cursor: default;
+}
+
+.agent-item:hover {
+  background-color: var(--color-bg-hover);
+  border-color: var(--color-border-light);
+}
+
+/* Platform badge */
+.agent-platform {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.agent-platform--chatgpt { background-color: var(--color-platform-chatgpt); }
+.agent-platform--gemini  { background-color: var(--color-platform-gemini); }
+.agent-platform--claude  { background-color: var(--color-platform-claude); }
+.agent-platform--unknown { background-color: var(--color-text-faint); }
+
+/* Agent info text */
+.agent-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-name {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-model {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Status pill */
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.agent-status__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Status-specific colors */
+.agent-status--idle           { color: var(--color-status-idle); }
+.agent-status--idle .agent-status__dot { background-color: var(--color-status-idle); }
+
+.agent-status--thinking           { color: var(--color-status-thinking); }
+.agent-status--thinking .agent-status__dot {
+  background-color: var(--color-status-thinking);
+  animation: pulse-warning 1s ease-in-out infinite;
+}
+
+.agent-status--responding           { color: var(--color-status-responding); }
+.agent-status--responding .agent-status__dot {
+  background-color: var(--color-status-responding);
+  animation: pulse-accent 0.8s ease-in-out infinite;
+}
+
+.agent-status--tool_use           { color: var(--color-status-tool-use); }
+.agent-status--tool_use .agent-status__dot { background-color: var(--color-status-tool-use); }
+
+.agent-status--task_complete           { color: var(--color-status-task-complete); }
+.agent-status--task_complete .agent-status__dot { background-color: var(--color-status-task-complete); }
+
+.agent-status--error           { color: var(--color-status-error); }
+.agent-status--error .agent-status__dot { background-color: var(--color-status-error); }
+
+.agent-status--offline           { color: var(--color-status-offline); }
+.agent-status--offline .agent-status__dot { background-color: var(--color-status-offline); }
+
+.agent-status--collaboration           { color: var(--color-status-collaboration); }
+.agent-status--collaboration .agent-status__dot { background-color: var(--color-status-collaboration); }
+
+.agent-status--walking_to_desk           { color: var(--color-status-walking); }
+.agent-status--walking_to_desk .agent-status__dot { background-color: var(--color-status-walking); }
+
+@keyframes pulse-accent {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* --------------------------------------------------------------------------
+   Empty state
+   -------------------------------------------------------------------------- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4) var(--space-3);
+  gap: var(--space-2);
+  text-align: center;
+}
+
+.empty-state.is-hidden {
+  display: none;
+}
+
+.empty-state__icon {
+  width: 40px;
+  height: 40px;
+  color: var(--color-text-faint);
+  margin-bottom: var(--space-1);
+}
+
+.empty-state__text {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.empty-state__hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-faint);
+}
+
+/* --------------------------------------------------------------------------
+   Footer
+   -------------------------------------------------------------------------- */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-bg-surface);
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.footer__version {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-faint);
+}
+
+/* --------------------------------------------------------------------------
+   Reconnect button
+   -------------------------------------------------------------------------- */
+.btn--reconnect {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--color-accent);
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-accent-dim);
+  background: var(--color-accent-dim);
+  transition: background-color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.btn--reconnect:hover {
+  background-color: rgba(79, 195, 247, 0.25);
+}
+
+.btn--reconnect:active {
+  opacity: 0.8;
+}
+
+.btn--reconnect:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn__icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Utilities
+   -------------------------------------------------------------------------- */
+.is-hidden {
+  display: none !important;
+}

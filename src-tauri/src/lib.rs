@@ -410,6 +410,21 @@ pub fn run() {
                 app_log!("AUTO_IDLE", "idle channel closed, consumer stopping");
             });
 
+            // Spawn extension HTTP server for Chrome extension integration
+            let registry_for_ext = Arc::clone(&registry);
+            let config_for_ext = Arc::clone(&config);
+            let handle_for_ext = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let port = config_for_ext.read().await.extension_port;
+                ipc::extension_server::run_extension_server(
+                    port,
+                    registry_for_ext,
+                    config_for_ext,
+                    handle_for_ext,
+                )
+                .await;
+            });
+
             Ok(())
         })
         .run(tauri::generate_context!())

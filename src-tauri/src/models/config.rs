@@ -72,6 +72,11 @@ pub struct AppConfig {
     /// ```
     #[serde(default)]
     pub custom_model_keywords: HashMap<String, String>,
+
+    /// Port for the HTTP server that receives Chrome extension messages.
+    /// Default: 7842
+    #[serde(default = "default_extension_port")]
+    pub extension_port: u16,
 }
 
 fn default_scan_interval() -> u64 {
@@ -125,6 +130,10 @@ fn default_responding_timeout() -> u64 {
     30_000
 }
 
+fn default_extension_port() -> u16 {
+    7842
+}
+
 fn default_log_roots() -> Vec<PathBuf> {
     dirs::home_dir()
         .map(|h| {
@@ -155,6 +164,7 @@ impl Default for AppConfig {
             responding_timeout_ms: default_responding_timeout(),
             debug_mode: false,
             custom_model_keywords: HashMap::new(),
+            extension_port: default_extension_port(),
         }
     }
 }

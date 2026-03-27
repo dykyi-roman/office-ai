@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "OfficeAI",
+  "version": "0.1.0",
+  "description": "Monitors AI agent activity in browser-based AI chats and sends state to the OfficeAI desktop app.",
+
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "tabs"
+  ],
+
+  "host_permissions": [
+    "*://chatgpt.com/*",
+    "*://gemini.google.com/*",
+    "*://claude.ai/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["*://chatgpt.com/*"],
+      "js": ["content/base-observer.js", "content/observer-chatgpt.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://gemini.google.com/*"],
+      "js": ["content/base-observer.js", "content/observer-gemini.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://claude.ai/*"],
+      "js": ["content/base-observer.js", "content/observer-claude.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "OfficeAI",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

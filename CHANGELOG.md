@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.1] - 2026-03-13
+## [0.5.0] - 2026-03-27
+
+### Added
+- **AI Office Chrome Extension** — Native messaging host for Chrome extension integration.
+
+## [0.4.1] - 2026-03-23
+
+### Added
+- **Codex Sub-Agent Tracking** — Tracks lifecycles as sub-agents.
+
+## [0.4.0] - 2026-03-13
 
 ### Added
 - **Sidebar Agent Switching** — Clicking a different agent on the canvas while the sidebar is open now seamlessly switches to the new agent instead of closing the sidebar first. Removed the full-screen backdrop overlay that was intercepting canvas clicks; sidebar now closes via X button, Escape key, or `office:deselect-agent` event dispatched when clicking empty canvas space.

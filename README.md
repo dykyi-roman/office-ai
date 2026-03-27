@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-active%20development-brightgreen?style=for-the-badge" alt="Status" />
-  <img src="https://img.shields.io/badge/version-0.4.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.5.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/tauri-v2-orange?style=for-the-badge" alt="Tauri" />
   <img src="https://img.shields.io/badge/svelte-5-red?style=for-the-badge" alt="Svelte" />
   <img src="https://img.shields.io/badge/pixi.js-v8-purple?style=for-the-badge" alt="PixiJS" />
@@ -34,6 +34,7 @@
 - [Agent Lifecycle](#agent-lifecycle)
 - [Idle Zones](#idle-zones)
 - [Agent Discovery](#agent-discovery)
+- [Browser Extension](#browser-extension)
 - [Troubleshooting](#troubleshooting)
 - [Non-Goals](#non-goals)
 - [Roadmap](#roadmap)
@@ -141,12 +142,12 @@ A quick walkthrough of what you see when you use OfficeAI.
 OfficeAI operates on a **zero-intrusion** principle — it only observes AI agents, never interferes with their work.
 
 ```
-OS Processes (sysinfo)          Agent log files
-        │                                │
-        ▼                                ▼
-  Process Scanner (2s)          Log Watcher (500ms)
-        │                                │
-        └──────────┬─────────────────────┘
+OS Processes (sysinfo)    Agent log files       Chrome Extension
+        │                       │               (MV3 + Native Messaging)
+        ▼                       ▼                       │
+  Process Scanner (2s)  Log Watcher (500ms)    Extension HTTP Server
+        │                       │               (localhost:7842)
+        └──────────┬────────────┴───────────────────────┘
                    ▼
            Agent Registry ──► Tauri IPC Events
                    │
@@ -156,11 +157,12 @@ OS Processes (sysinfo)          Agent log files
    (overlay)             (isometric scene)
 ```
 
-1. **Process Scanner** discovers AI agents via OS process list
+1. **Process Scanner** discovers CLI agents via OS process list
 2. **Log Watcher** reads agent log files for status changes
-3. **State Classifier** (FSM with debounce) determines agent state
-4. **Agent Registry** maintains state, emits Tauri IPC events, and updates the app icon badge
-5. **Frontend** renders agents as animated characters in an isometric office
+3. **Chrome Extension** observes browser AI chats (ChatGPT, Gemini, Claude.ai) via DOM MutationObserver
+4. **State Classifier** (FSM with debounce) determines agent state
+5. **Agent Registry** maintains state, emits Tauri IPC events, and updates the app icon badge
+6. **Frontend** renders agents as animated characters in an isometric office
 
 The app icon badge displays the number of active agents directly on the dock (macOS) or taskbar (Linux), so you always know how many agents are working without switching to the app window.
 
@@ -267,6 +269,26 @@ The system uses different detection strategies depending on the agent type:
 | **Claude Code (CLI)**   | Implemented   | Process scanning via `sysinfo` crate. Monitoring `~/.claude/projects/` directory               | Log file parsing: `user_prompt`, `assistant_start`, `tool_use`, `assistant_end`       |
 | **Gemini CLI**          | Implemented   | Process scanning (`gemini`, `node.*gemini`). Monitoring `~/.gemini/tmp/` directory              | JSON-array session parsing: `user`, `gemini`, `info` messages                          |
 | **Codex CLI**           | Implemented   | Process scanning (`codex`). Monitoring `~/.codex/sessions/` directory                          | JSONL parsing: `message`, `function_call_output`, `exec_result` events                 |
+| **ChatGPT (Browser)**   | Implemented   | Chrome MV3 extension with DOM MutationObserver on `chatgpt.com`                                | CSS selector detection: stop button, streaming response, code interpreter               |
+| **Gemini (Browser)**    | Implemented   | Chrome MV3 extension with DOM MutationObserver on `gemini.google.com`                          | Web Component attributes: `model-response[loading]`, `mat-progress-spinner`             |
+| **Claude (Browser)**    | Implemented   | Chrome MV3 extension with DOM MutationObserver on `claude.ai`                                  | CSS selector detection: `[data-is-streaming]`, artifact panel, thinking indicator        |
+
+---
+
+## Browser Extension
+
+OfficeAI includes a Chrome MV3 extension that tracks AI agent activity directly in browser tabs. It monitors **ChatGPT**, **Gemini**, and **Claude.ai** sessions in real time — each open chat appears as a separate employee in the office, just like CLI agents.
+
+<p align="center"><img src="images/browser.png" width="700" alt="Browser extension tracking ChatGPT, Gemini, and Claude agents"></p>
+
+**How it works:**
+
+- Content scripts use `MutationObserver` to detect DOM changes on AI chat pages (streaming responses, thinking indicators, tool use)
+- The background Service Worker bridges content scripts to a Native Messaging Host (Node.js)
+- The host forwards agent state via HTTP to the Tauri desktop app (`localhost:7842`)
+- Each browser tab gets a unique agent ID: `browser-{platform}-{hash}` (e.g. `browser-chatgpt-a1b2c3d4`)
+
+For full details — architecture, CSS selectors, detection algorithms, native messaging protocol — see [EXTENSION.md](docs/EXTENSION.md).
 
 ---
 
@@ -290,7 +312,7 @@ The system uses different detection strategies depending on the agent type:
 ## Roadmap
 
 - [ ] **ChatGPT CLI Support** — integration with official and community-built CLIs.
-- [ ] **Browser Model Tracking** — visual indicators for ChatGPT/Claude web sessions (via browser extension).
+- [x] **Browser Model Tracking** — ChatGPT, Gemini, Claude.ai web sessions tracked via Chrome MV3 extension.
 - [ ] **Office Customization** — changeable floor plans, custom furniture, and skins.
 - [ ] **Collaboration Mode** — visual links/indicators when multiple agents are delegating tasks to each other.
 - [ ] **New Idle Zones** — gym area, library, and outdoor garden for more character variety.
@@ -331,6 +353,7 @@ The system uses different detection strategies depending on the agent type:
 | **Process discovery**  | sysinfo (Rust)                           |
 | **Async runtime**      | Tokio                                    |
 | **IPC**                | Tauri events + commands                  |
+| **Browser extension**  | Chrome MV3 + Native Messaging            |
 | **Config storage**     | TOML (`~/.config/office-ai/config.toml`) |
 | **TS testing**         | Vitest (~411 tests)                      |
 | **Rust testing**       | cargo test (~261 tests)                  |
@@ -345,7 +368,7 @@ The system uses different detection strategies depending on the agent type:
 | Agent log parsing                   | Yes        | Yes             | Yes     |
 | Isometric office rendering          | Yes        | Yes             | Yes     |
 | App icon badge (active agent count) | Yes (Dock) | Yes (Unity/KDE) | No      |
-| Chrome Extension                    | No         | No              | No      |
+| Chrome Extension                    | Yes        | Yes             | Planned |
 | Production build                    | DMG        | AppImage        | MSI     |
 
 The app icon badge shows the number of currently active agents (not idle, not offline) as a numeric indicator on the dock/taskbar icon. When no agents are active, the badge is removed. The badge updates automatically on every agent state change — registration, status transition, and removal.
@@ -360,6 +383,7 @@ The app icon badge shows the number of currently active agents (not idle, not of
 | [FRONTEND.md](docs/FRONTEND.md)           | TypeScript frontend — Svelte 5, PixiJS v8, stores, UI     |
 | [BACKEND.md](docs/BACKEND.md)             | Rust backend — process scanner, log parser, IPC           |
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | All settings explained (defaults, behavior)               |
+| [EXTENSION.md](docs/EXTENSION.md)         | Chrome extension — setup, architecture, detection         |
 | [TESTING.md](docs/TESTING.md)             | Test structure, commands, coverage, CI/CD                 |
 | [CHANGELOG.md](CHANGELOG.md)               | Project history, version changes, and release notes       |
 | [CONTRIBUTING.md](CONTRIBUTING.md)        | How to contribute, code style, commit conventions         |

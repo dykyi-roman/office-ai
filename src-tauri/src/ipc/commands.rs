@@ -60,13 +60,14 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<serde_json::Value,
             .collect::<Vec<_>>()
             .join("\n"),
         "debugMode": config.debug_mode,
+        "extensionPort": config.extension_port,
     }))
 }
 
 /// Update a config value by key.
 /// Supported keys: scan_interval_ms, idle_timeout_ms, state_debounce_ms, work_timeout_ms,
 ///                  responding_timeout_ms, theme, sound_enabled, show_agent_metrics,
-///                  animation_speed, max_agents
+///                  animation_speed, max_agents, extension_port
 #[tauri::command]
 pub async fn set_config(
     key: String,
@@ -240,6 +241,11 @@ pub fn apply_config_value(config: &mut AppConfig, key: &str, value: &str) -> Res
             // Accepts JSON object: {"windsurf":"windsurf","cody":"cody"}
             config.custom_model_keywords =
                 serde_json::from_str(value).map_err(|e| format!("Invalid JSON for {key}: {e}"))?;
+        }
+        "extension_port" | "extensionPort" => {
+            config.extension_port = value
+                .parse()
+                .map_err(|_| format!("Invalid value for {key}: {value}"))?;
         }
         _ => {
             return Err(format!("Unknown config key: {key}"));

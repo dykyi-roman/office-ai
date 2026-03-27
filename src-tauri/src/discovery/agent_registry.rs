@@ -137,7 +137,7 @@ impl AgentRegistry {
     pub fn active_count(&self) -> u32 {
         self.agents
             .values()
-            .filter(|a| !matches!(a.status, Status::Idle | Status::Offline | Status::Error))
+            .filter(|a| !matches!(a.status, Status::Idle | Status::Offline | Status::Error | Status::TaskComplete))
             .count() as u32
     }
 

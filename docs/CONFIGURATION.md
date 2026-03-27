@@ -128,6 +128,12 @@ This allows adding support for new CLI agents without rebuilding the application
 
 Enables verbose diagnostic logging in the process scanner and log consumer. When enabled, filtered-out processes and correlation details are logged under `[SCANNER]` and `[LOG_MATCH]` categories. Useful for troubleshooting agent detection issues.
 
+### 2.8. Extension Port
+
+**Key:** `extension_port` | **Type:** `u16` | **Default:** `7842`
+
+Port for the HTTP server that receives messages from the Chrome extension native messaging host. The server binds to `127.0.0.1` (localhost only). The native messaging host (`extension/native-messaging/host.js`) must use the same port (configurable via `OFFICE_AI_PORT` env var).
+
 ### 2.3. Idle Timeout
 
 **Key:** `idle_timeout_ms` | **Type:** `u64` (ms) | **Default:** `3000`

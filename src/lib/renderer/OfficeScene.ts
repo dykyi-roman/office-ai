@@ -714,8 +714,12 @@ export class OfficeScene {
       sprite.showSpeechBubble(t("agent.greeting"), 2000);
     }
 
-    // Walk to idle zone
-    this.walkAgentToIdleZone(agent.id, sprite);
+    // If agent is already working, go directly to desk; otherwise idle zone
+    if (WORK_STATUSES.has(agent.status)) {
+      this.moveAgentToDesk(agent.id, sprite, agent);
+    } else {
+      this.walkAgentToIdleZone(agent.id, sprite);
+    }
   }
 
   private onAgentLost(agentId: string): void {
