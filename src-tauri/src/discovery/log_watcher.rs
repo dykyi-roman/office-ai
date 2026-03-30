@@ -19,6 +19,8 @@ pub struct RawLogLine {
 }
 
 /// Collect all files from watched directories.
+/// Descends one level into subdirectories to support nested session structures
+/// (e.g. Cursor's `agent-transcripts/{session-uuid}/{session-uuid}.jsonl`).
 fn collect_files(dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for dir in dirs {
@@ -27,6 +29,15 @@ fn collect_files(dirs: &[PathBuf]) -> Vec<PathBuf> {
                 let path = entry.path();
                 if path.is_file() {
                     files.push(path);
+                } else if path.is_dir() {
+                    if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                        for sub_entry in sub_entries.flatten() {
+                            let sub_path = sub_entry.path();
+                            if sub_path.is_file() {
+                                files.push(sub_path);
+                            }
+                        }
+                    }
                 }
             }
         }

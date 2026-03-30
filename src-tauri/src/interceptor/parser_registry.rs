@@ -109,6 +109,13 @@ impl ParserRegistry {
         None
     }
 
+    /// Get the custom activity timeout for a log file path.
+    /// File-activity-based parsers return a shorter timeout than the global default.
+    pub fn activity_timeout_for_path(&self, path: &Path) -> Option<u64> {
+        self.find_by_binding(path)
+            .and_then(|parser| parser.activity_timeout_ms())
+    }
+
     /// Parse a log line, routing to the correct parser.
     ///
     /// 1. Check explicit directory bindings (longest prefix match)
@@ -360,5 +367,22 @@ mod tests {
 
         let path = Path::new("/home/user/.claude/projects/p/s.jsonl");
         assert!(reg.parse_line(path, "").is_none());
+    }
+
+    #[test]
+    fn test_activity_timeout_returns_none_for_default_parsers() {
+        let mut reg = ParserRegistry::new();
+        let idx = reg.register_parser(make_test_parser("claude", ".claude"));
+        reg.bind_directory(PathBuf::from("/home/user/.claude"), idx);
+
+        let path = Path::new("/home/user/.claude/projects/p/s.jsonl");
+        assert_eq!(reg.activity_timeout_for_path(path), None);
+    }
+
+    #[test]
+    fn test_activity_timeout_returns_none_for_unbound_path() {
+        let reg = ParserRegistry::new();
+        let path = Path::new("/some/unknown/path/file.jsonl");
+        assert_eq!(reg.activity_timeout_for_path(path), None);
     }
 }

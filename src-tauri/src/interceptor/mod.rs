@@ -3,11 +3,13 @@
 
 pub mod claude_code_parser;
 pub mod codex_cli_parser;
+pub mod cursor_ide_parser;
 pub mod gemini_cli_parser;
 pub mod parsed_event;
 pub mod parser_registry;
 pub mod parser_trait;
 pub mod state_classifier;
+pub mod windsurf_ide_parser;
 
 #[allow(unused_imports)]
 pub use parsed_event::ParsedEvent;

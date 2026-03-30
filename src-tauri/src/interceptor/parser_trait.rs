@@ -85,4 +85,12 @@ pub trait AgentLogParser: Send + Sync {
 
     /// Create a file reader for this parser's log format.
     fn create_reader(&self) -> Box<dyn LogFileReader>;
+
+    /// Custom auto-idle timeout in milliseconds for work statuses (Thinking/ToolUse).
+    /// File-activity-based parsers (Windsurf, Cursor) override this with a shorter
+    /// timeout (~15s) because they cannot detect task completion — only activity start.
+    /// Returns `None` to use the global `work_timeout_ms` from StateClassifier.
+    fn activity_timeout_ms(&self) -> Option<u64> {
+        None
+    }
 }

@@ -129,12 +129,10 @@ fn read_new_lines(path: &Path, positions: &mut HashMap<PathBuf, u64>) -> Vec<Str
     }
 
     let mut lines = Vec::new();
-    let mut current_pos = seek_pos;
 
-    for line_result in reader.lines() {
+    for line_result in reader.by_ref().lines() {
         match line_result {
             Ok(line) => {
-                current_pos += line.len() as u64 + 1;
                 if !line.trim().is_empty() {
                     lines.push(line);
                 }
@@ -143,7 +141,11 @@ fn read_new_lines(path: &Path, positions: &mut HashMap<PathBuf, u64>) -> Vec<Str
         }
     }
 
-    positions.insert(path.to_path_buf(), current_pos);
+    // Use stream_position for accurate tracking regardless of line endings (LF vs CRLF)
+    let final_pos = reader
+        .stream_position()
+        .unwrap_or(seek_pos);
+    positions.insert(path.to_path_buf(), final_pos);
     lines
 }
 

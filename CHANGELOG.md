@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-03-30
+
+### Added
+- **Cursor IDE Support** — Process detection and AI activity monitoring for Cursor IDE. Detects the Cursor Electron process and tracks AI usage via file modification timestamps on `~/.cursor/ai-tracking/`.
+- **Windsurf IDE Support** — Process detection and AI activity monitoring for Windsurf IDE. Detects the Windsurf Electron process and tracks AI usage via file modification timestamps on `~/.codeium/windsurf/cascade/`, `~/.codeium/implicit/`, and `~/.codeium/cascade/` (legacy).
+- **GUI Agent Detection** — New TTY bypass mechanism allows detection of Electron-based IDE agents (Cursor, Windsurf) that don't have an interactive terminal. Electron helper processes are automatically blocklisted.
+- **File Activity Reader** — New `FileActivityReader` log reader that monitors file `mtime` changes as a proxy for AI activity in IDE agents with proprietary data formats.
+- **Parser Activity Timeout** — New `activity_timeout_ms()` trait method allows file-activity parsers (Windsurf) to use a shorter auto-idle timeout (15s) since they cannot detect task completion.
+- **Source::Ide** — New agent source type distinguishing IDE-based agents from CLI and browser extension agents.
+
+### Changed
+- **Process Scanner** — Added `Cursor` and `Windsurf` to default detection patterns. Added `windsurf` to built-in MODEL_KEYWORDS. Blocklist now filters Electron helper processes (`Cursor Helper`, `Windsurf Helper`).
+- **Config Migration** — `ensure_defaults()` automatically adds new Cursor/Windsurf patterns to existing configurations.
+
 ## [0.5.0] - 2026-03-27
 
 ### Added

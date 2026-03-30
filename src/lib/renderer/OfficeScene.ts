@@ -7,7 +7,8 @@ import {
   Container,
   Graphics,
   Sprite,
-  type Spritesheet,
+  Spritesheet,
+  Texture,
 } from "pixi.js";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -353,6 +354,25 @@ export class OfficeScene {
   // Private: asset loading
   // ---------------------------------------------------------------------------
 
+  private async loadSpritesheetFromUrl(jsonUrl: string): Promise<Spritesheet> {
+    const jsonRes = await fetch(jsonUrl);
+    if (!jsonRes.ok) throw new Error(`HTTP ${jsonRes.status} for ${jsonUrl}`);
+    const data = await jsonRes.json();
+
+    const dir = jsonUrl.substring(0, jsonUrl.lastIndexOf("/") + 1);
+    const imageUrl = dir + (data.meta?.image ?? "");
+
+    const imgRes = await fetch(imageUrl);
+    if (!imgRes.ok) throw new Error(`HTTP ${imgRes.status} for ${imageUrl}`);
+    const blob = await imgRes.blob();
+    const bitmap = await createImageBitmap(blob);
+    const texture = Texture.from({ resource: bitmap, label: imageUrl });
+
+    const sheet = new Spritesheet(texture, data);
+    await sheet.parse();
+    return sheet;
+  }
+
   private async loadAssets(): Promise<void> {
     const tiers: Tier[] = ["expert", "senior", "middle", "junior"];
     const tierFilenames: Record<Tier, string> = {
@@ -365,8 +385,8 @@ export class OfficeScene {
     await Promise.allSettled(
       tiers.map(async (tier) => {
         try {
-          const jsonPath = `/src/assets/sprites/agents/${tierFilenames[tier]}.json`;
-          const sheet = await Assets.load<Spritesheet>(jsonPath);
+          const jsonPath = `/static/sprites/agents/${tierFilenames[tier]}.json`;
+          const sheet = await this.loadSpritesheetFromUrl(jsonPath);
           this.agentSheets.set(tier, sheet);
         } catch {
           console.warn(`[OfficeScene] Could not load spritesheet for tier: ${tier}`);
@@ -376,8 +396,8 @@ export class OfficeScene {
     );
 
     try {
-      this.tilesheet = await Assets.load<Spritesheet>(
-        "/src/assets/tiles/office-tileset.json"
+      this.tilesheet = await this.loadSpritesheetFromUrl(
+        "/static/tiles/office-tileset.json"
       );
     } catch {
       console.warn("[OfficeScene] Could not load tile spritesheet — using fallbacks");

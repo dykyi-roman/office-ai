@@ -22,7 +22,23 @@ const BUILTIN_PATTERNS: &[&str] = &[
 
 /// Process names that should never be treated as AI agents,
 /// even if "claude" appears in their command line arguments.
-const PROCESS_BLOCKLIST: &[&str] = &["ssh", "sshd", "git", "scp", "sftp", "rsync", "curl", "wget"];
+const PROCESS_BLOCKLIST: &[&str] = &[
+    "ssh",
+    "sshd",
+    "git",
+    "scp",
+    "sftp",
+    "rsync",
+    "curl",
+    "wget",
+    "Cursor Helper",
+    "CursorUIViewService",
+    "Windsurf Helper",
+];
+
+/// Known GUI-based AI agent process names (Electron apps without TTY).
+/// These bypass the TTY filter that normally excludes non-interactive processes.
+const GUI_AGENT_NAMES: &[&str] = &["cursor", "windsurf"];
 
 /// Message sent from scanner to the registry
 #[derive(Debug, Clone)]
@@ -59,7 +75,19 @@ fn is_version_number(name: &str) -> bool {
 
 /// Check if a process name is in the blocklist of non-agent executables.
 fn is_blocklisted(name: &str) -> bool {
-    PROCESS_BLOCKLIST.contains(&name)
+    PROCESS_BLOCKLIST
+        .iter()
+        .any(|&blocked| name == blocked || name.starts_with(blocked))
+}
+
+/// Check if a process is a known GUI-based AI agent (e.g. Cursor, Windsurf).
+/// These are Electron apps that don't have a TTY but should still be detected.
+fn is_gui_agent(name: &str, cmdline: &str) -> bool {
+    let lower = name.to_lowercase();
+    let lower_cmd = cmdline.to_lowercase();
+    GUI_AGENT_NAMES
+        .iter()
+        .any(|&kw| lower.contains(kw) || lower_cmd.contains(kw))
 }
 
 /// Check if a process has an interactive terminal (TTY).
@@ -184,6 +212,7 @@ const MODEL_KEYWORDS: &[(&str, &str)] = &[
     ("codex", "codex"),
     ("aider", "aider"),
     ("cursor", "cursor"),
+    ("windsurf", "windsurf"),
     ("copilot", "copilot"),
 ];
 
@@ -268,9 +297,11 @@ pub fn process_to_agent_state(
     }
 }
 
-fn infer_source_from_name(_name: &str) -> Source {
-    // All detected processes are CLI agents for now.
-    // Future: distinguish BrowserExtension / SdkHook sources by process name.
+fn infer_source_from_name(name: &str) -> Source {
+    let lower = name.to_lowercase();
+    if GUI_AGENT_NAMES.iter().any(|&kw| lower.contains(kw)) {
+        return Source::Ide;
+    }
     Source::Cli
 }
 
@@ -345,22 +376,35 @@ pub fn scan_processes_with_patterns(
         let blocked = is_blocklisted(&name);
         let version = is_version_number(&name);
         let has_interactive_tty = !entry.tty.is_empty() && entry.tty != "??" && entry.tty != "?";
+        let gui_agent = is_gui_agent(&name, &entry.args);
         // Filter stopped/suspended processes (stat starts with 'T').
         // When a terminal tab is closed, the child process may receive SIGTSTP
         // and enter stopped state instead of dying — treat it as gone.
         let is_stopped = entry.stat.starts_with('T');
 
-        if blocked || version || !has_interactive_tty || is_stopped {
+        // GUI agents (Cursor, Windsurf) don't have a TTY — bypass TTY filter for them
+        if blocked || version || is_stopped {
             app_log_debug!(
                 debug_mode,
                 "SCANNER",
-                "filtered out pid={} name='{}' blocked={} version={} tty={} stat={} cmdline='{}'",
+                "filtered out pid={} name='{}' blocked={} version={} stat={} cmdline='{}'",
                 entry.pid,
                 name,
                 blocked,
                 version,
-                has_interactive_tty,
                 entry.stat,
+                &entry.args[..entry.args.len().min(120)]
+            );
+            continue;
+        }
+        if !has_interactive_tty && !gui_agent {
+            app_log_debug!(
+                debug_mode,
+                "SCANNER",
+                "filtered out pid={} name='{}' no_tty tty={} cmdline='{}'",
+                entry.pid,
+                name,
+                entry.tty,
                 &entry.args[..entry.args.len().min(120)]
             );
             continue;
@@ -402,6 +446,43 @@ pub fn scan_processes_with_patterns(
                     ppid
                 );
                 return false;
+            }
+        }
+        true
+    });
+
+    // Deduplicate GUI agents by name: Electron apps (Cursor, Windsurf) spawn
+    // multiple processes with identical names that aren't parent-child related.
+    // Keep only the process with the lowest PID (the main/first process).
+    let mut gui_seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for proc in &detected {
+        if is_gui_agent(&proc.name, &proc.cmdline) {
+            let lower = proc.name.to_lowercase();
+            gui_seen
+                .entry(lower)
+                .and_modify(|min_pid| {
+                    if proc.pid < *min_pid {
+                        *min_pid = proc.pid;
+                    }
+                })
+                .or_insert(proc.pid);
+        }
+    }
+    detected.retain(|proc| {
+        if is_gui_agent(&proc.name, &proc.cmdline) {
+            let lower = proc.name.to_lowercase();
+            if let Some(&min_pid) = gui_seen.get(&lower) {
+                if proc.pid != min_pid {
+                    app_log_debug!(
+                        debug_mode,
+                        "SCANNER",
+                        "dedup GUI: pid={} name='{}' duplicate of pid={}, skipping",
+                        proc.pid,
+                        proc.name,
+                        min_pid
+                    );
+                    return false;
+                }
             }
         }
         true
@@ -801,6 +882,61 @@ mod tests {
         assert_eq!(agent.model, "windsurf");
     }
 
+    #[test]
+    fn test_is_gui_agent() {
+        assert!(is_gui_agent("Cursor", "Cursor"));
+        assert!(is_gui_agent("cursor", "cursor"));
+        assert!(is_gui_agent("Windsurf", "Windsurf"));
+        assert!(is_gui_agent("windsurf", "windsurf"));
+        assert!(is_gui_agent("node", "/Applications/Cursor.app/Contents/MacOS/Cursor"));
+        assert!(!is_gui_agent("claude", "claude"));
+        assert!(!is_gui_agent("node", "node script.js"));
+    }
+
+    #[test]
+    fn test_cursor_helper_is_blocklisted() {
+        assert!(is_blocklisted("Cursor Helper"));
+        assert!(is_blocklisted("Cursor Helper (Renderer)"));
+        assert!(is_blocklisted("CursorUIViewService"));
+        assert!(is_blocklisted("Windsurf Helper"));
+        assert!(is_blocklisted("Windsurf Helper (GPU)"));
+        // Regular agents are not blocklisted
+        assert!(!is_blocklisted("Cursor"));
+        assert!(!is_blocklisted("Windsurf"));
+    }
+
+    #[test]
+    fn test_infer_source_from_name_ide() {
+        assert_eq!(infer_source_from_name("Cursor"), Source::Ide);
+        assert_eq!(infer_source_from_name("cursor"), Source::Ide);
+        assert_eq!(infer_source_from_name("Windsurf"), Source::Ide);
+        assert_eq!(infer_source_from_name("windsurf"), Source::Ide);
+        assert_eq!(infer_source_from_name("claude"), Source::Cli);
+        assert_eq!(infer_source_from_name("gemini"), Source::Cli);
+    }
+
+    #[test]
+    fn test_windsurf_in_model_keywords() {
+        let empty = HashMap::new();
+        assert_eq!(infer_initial_model("windsurf", "", &empty), "windsurf");
+        assert_eq!(infer_initial_model("Windsurf", "", &empty), "windsurf");
+    }
+
+    #[test]
+    fn test_process_to_agent_state_cursor_source_ide() {
+        let proc = DetectedProcess {
+            pid: 8115,
+            name: "Cursor".to_string(),
+            cmdline: "/Applications/Cursor.app/Contents/MacOS/Cursor".to_string(),
+            start_time: 1000,
+            cwd: None,
+        };
+        let agent = process_to_agent_state(&proc, &HashMap::new());
+        assert_eq!(agent.model, "cursor");
+        assert_eq!(agent.source, Source::Ide);
+        assert_eq!(agent.name, "Cursor-8115");
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_has_tty_nonexistent_pid() {
@@ -837,6 +973,66 @@ mod tests {
         assert!(!"R+".starts_with('T'));
         // Zombie — not filtered by this check (handled separately if needed)
         assert!(!"Z".starts_with('T'));
+    }
+
+    #[test]
+    fn test_gui_agent_dedup_by_name() {
+        // Simulate multiple Cursor processes (Electron spawns several with same name)
+        let procs = vec![
+            DetectedProcess {
+                pid: 100,
+                name: "Cursor".to_string(),
+                cmdline: "/Applications/Cursor.app/Contents/MacOS/Cursor".to_string(),
+                start_time: 1000,
+                cwd: None,
+            },
+            DetectedProcess {
+                pid: 200,
+                name: "Cursor".to_string(),
+                cmdline: "/Applications/Cursor.app/Contents/MacOS/Cursor --type=gpu".to_string(),
+                start_time: 1000,
+                cwd: None,
+            },
+            DetectedProcess {
+                pid: 300,
+                name: "claude".to_string(),
+                cmdline: "claude".to_string(),
+                start_time: 1000,
+                cwd: None,
+            },
+        ];
+
+        // Apply GUI dedup logic
+        let mut detected = procs;
+        let mut gui_seen: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        for proc in &detected {
+            if is_gui_agent(&proc.name, &proc.cmdline) {
+                let lower = proc.name.to_lowercase();
+                gui_seen
+                    .entry(lower)
+                    .and_modify(|min_pid| {
+                        if proc.pid < *min_pid {
+                            *min_pid = proc.pid;
+                        }
+                    })
+                    .or_insert(proc.pid);
+            }
+        }
+        detected.retain(|proc| {
+            if is_gui_agent(&proc.name, &proc.cmdline) {
+                let lower = proc.name.to_lowercase();
+                if let Some(&min_pid) = gui_seen.get(&lower) {
+                    return proc.pid == min_pid;
+                }
+            }
+            true
+        });
+
+        assert_eq!(detected.len(), 2); // Cursor (pid 100) + claude (pid 300)
+        assert!(detected.iter().any(|p| p.pid == 100 && p.name == "Cursor"));
+        assert!(detected.iter().any(|p| p.pid == 300 && p.name == "claude"));
+        assert!(!detected.iter().any(|p| p.pid == 200));
     }
 
     #[tokio::test]

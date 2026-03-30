@@ -15,7 +15,9 @@ use discovery::log_watcher::{run_log_watcher, RawLogLine};
 use discovery::process_scanner::{run_scanner, ScannerEvent};
 use interceptor::claude_code_parser::ClaudeCodeParser;
 use interceptor::codex_cli_parser::CodexCliParser;
+use interceptor::cursor_ide_parser::CursorIdeParser;
 use interceptor::gemini_cli_parser::GeminiCliParser;
+use interceptor::windsurf_ide_parser::WindsurfIdeParser;
 use interceptor::parser_registry::ParserRegistry;
 use interceptor::parser_trait::AgentLogParser;
 use interceptor::state_classifier::{StateClassifier, TransitionResult};
@@ -108,6 +110,8 @@ pub fn run() {
                 Arc::new(ClaudeCodeParser),
                 Arc::new(GeminiCliParser),
                 Arc::new(CodexCliParser::new()),
+                Arc::new(CursorIdeParser),
+                Arc::new(WindsurfIdeParser),
             ];
 
             let mut parser_registry = ParserRegistry::new();
@@ -335,7 +339,12 @@ pub fn run() {
                                 // This ensures scheduled_at > last_activity, so the
                                 // consumer won't discard the timer as stale.
                                 if is_updated {
-                                    if let Some(timeout) = classifier.auto_idle_timeout_for(&current_status) {
+                                    // Use parser-specific timeout if available (e.g. 15s for
+                                    // file-activity parsers like Windsurf), otherwise fall back
+                                    // to the global StateClassifier timeout (120s for Thinking).
+                                    let parser_timeout = parser_for_logs.activity_timeout_for_path(&raw.path);
+                                    let timeout = parser_timeout.or_else(|| classifier.auto_idle_timeout_for(&current_status));
+                                    if let Some(timeout) = timeout {
                                         let tx = idle_tx.clone();
                                         let id = agent_id.clone();
                                         let scheduled_at = std::time::Instant::now();

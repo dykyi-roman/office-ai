@@ -119,6 +119,8 @@ fn default_agent_process_patterns() -> Vec<String> {
         "node.*gemini".to_string(),
         "codex".to_string(),
         "node.*codex".to_string(),
+        "^Cursor$".to_string(),
+        "^Windsurf$".to_string(),
     ]
 }
 
@@ -268,6 +270,34 @@ mod tests {
     fn test_default_debug_mode_is_false() {
         let config = AppConfig::default();
         assert!(!config.debug_mode);
+    }
+
+    #[test]
+    fn test_default_patterns_include_cursor_windsurf() {
+        let defaults = default_agent_process_patterns();
+        assert!(defaults.contains(&"^Cursor$".to_string()));
+        assert!(defaults.contains(&"^Windsurf$".to_string()));
+    }
+
+    #[test]
+    fn test_ensure_defaults_adds_cursor_windsurf() {
+        let mut config = AppConfig {
+            agent_process_patterns: vec![
+                "claude".to_string(),
+                "node.*claude".to_string(),
+                "gemini".to_string(),
+                "node.*gemini".to_string(),
+                "codex".to_string(),
+                "node.*codex".to_string(),
+            ],
+            ..AppConfig::default()
+        };
+        let changed = config.ensure_defaults();
+        assert!(changed);
+        assert!(config.agent_process_patterns.contains(&"^Cursor$".to_string()));
+        assert!(config
+            .agent_process_patterns
+            .contains(&"^Windsurf$".to_string()));
     }
 
     #[test]

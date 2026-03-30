@@ -24,7 +24,7 @@ export type IdleLocation =
   | "hr_zone"
   | "lounge";
 
-export type Source = "cli" | "browser_extension" | "sdk_hook";
+export type Source = "cli" | "browser_extension" | "sdk_hook" | "ide";
 
 export interface SubAgentInfo {
   id: string;

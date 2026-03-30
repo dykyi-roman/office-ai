@@ -14,7 +14,7 @@
 
 ## 1. System Overview
 
-OfficeAI is a Tauri v2 desktop application that visualizes running AI agents (Claude Code, Gemini CLI, Codex CLI, ChatGPT) as animated employees in an isometric 2D office. The "zero-intrusion" principle means passive observation without modifying agent processes.
+OfficeAI is a Tauri v2 desktop application that visualizes running AI agents (Claude Code, Gemini CLI, Codex CLI, Cursor IDE, Windsurf IDE, ChatGPT) as animated employees in an isometric 2D office. The "zero-intrusion" principle means passive observation without modifying agent processes.
 
 ### High-Level Architecture
 
@@ -38,7 +38,7 @@ OfficeAI is a Tauri v2 desktop application that visualizes running AI agents (Cl
 │         ▼                    ▼                        ▼                 │
 │  ┌──────────────┐     ┌───────────────┐ ┌──────────────────┐            │
 │  │   Scanner    │     │ Parser Reg.   │ │ State Classifier │            │
-│  │   Consumer   │     │(Cld+Gem+Cdx)  │→│  (FSM 300ms)     │            │
+│  │   Consumer   │     │(Cld+Gem+Cdx   │→│  (FSM 300ms)     │            │
 │  └──────┬───────┘     └───────────────┘ └────────┬─────────┘            │
 │         │                                       │                       │
 │         ▼                                       ▼                       │
@@ -268,7 +268,7 @@ Optimal pathfinding on an isometric grid with 8-directional movement.
 
 ### 4.3. Process Detection (Hybrid: ps + sysinfo)
 
-Claude Code, Gemini CLI, and Codex CLI are all detected by the same hybrid approach:
+Claude Code, Gemini CLI, Codex CLI, Cursor IDE, and Windsurf IDE are all detected by the same hybrid approach:
 
 1. **`ps axo pid,ppid,tty,stat,args`** (Unix) — primary process enumeration, provides PID, PPID, TTY, stat, cmdline. On Windows, `sysinfo` serves as the enumeration fallback since `ps` is unavailable.
 2. **`sysinfo::System`** — supplementary metadata only (cwd, start_time) for already-detected PIDs. A cached `System` instance is reused across scan cycles, refreshed via `refresh_processes()` instead of `new_all()`.
@@ -420,7 +420,7 @@ src-tauri/src/*/mod.rs         — Rust unit tests
 
 Stored in `~/.config/office-ai/config.toml`.
 
-**14 fields** with defaults: scan_interval_ms=2000, idle_timeout_ms=3000, state_debounce_ms=300, work_timeout_ms=120000, responding_timeout_ms=30000, max_agents=20, animation_speed=1.0, theme="modern", sound_enabled=false, show_agent_metrics=true, agent_process_patterns=["claude","node.*claude","gemini","node.*gemini","codex"], log_roots=["~/.claude/projects","~/.gemini/tmp","~/.codex/sessions"], debug_mode=false.
+**16 fields** with defaults: scan_interval_ms=2000, idle_timeout_ms=3000, state_debounce_ms=300, work_timeout_ms=120000, responding_timeout_ms=30000, max_agents=20, animation_speed=1.0, theme="modern", sound_enabled=false, show_agent_metrics=true, agent_process_patterns=["claude","node.*claude","gemini","node.*gemini","codex","node.*codex","Cursor","Windsurf"], log_roots=["~/.claude/projects","~/.gemini/tmp","~/.codex/sessions"], debug_mode=false, custom_model_keywords={}, extension_port=7842.
 
 **Frontend-only settings** (not in config.toml): `showPrompts` (speech bubbles), `debugMode`, `language` (11 locales).
 

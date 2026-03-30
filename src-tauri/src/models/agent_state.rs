@@ -96,6 +96,7 @@ pub enum Source {
     Cli,
     BrowserExtension,
     SdkHook,
+    Ide,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

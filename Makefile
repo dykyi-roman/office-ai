@@ -1,4 +1,5 @@
-.PHONY: help dev build run clean install check test test-watch test-rust test-all bench lint fmt assets icons
+.PHONY: help dev build run clean install check test test-watch test-rust test-all bench lint fmt assets icons \
+       build-prod-macos build-prod-linux build-prod-windows
 
 # Default target
 help: ## Show this help
@@ -62,6 +63,17 @@ fmt: ## Format Rust code
 
 clippy: ## Run Rust linter (warnings as errors)
 	cd src-tauri && cargo clippy -- -D warnings
+
+# ─── Production Builds ────────────────────────────────────────
+
+build-prod-macos: ## Build production installer for macOS (.dmg)
+	bash production/scripts/build-macos.sh
+
+build-prod-linux: ## Build production installers for Linux (.deb + .AppImage + .rpm)
+	bash production/scripts/build-linux.sh
+
+build-prod-windows: ## Build production installers for Windows (.msi + NSIS .exe)
+	powershell -ExecutionPolicy Bypass -File production/scripts/build-windows.ps1
 
 # ─── Assets ───────────────────────────────────────────────────────────────────
 

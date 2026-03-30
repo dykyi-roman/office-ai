@@ -1,9 +1,9 @@
 {
   "name": "office_ai",
   "description": "OfficeAI native messaging host — bridges the Chrome extension to the Tauri desktop app",
-  "path": "/Users/dykyi/projects/ai-office/extension/native-messaging/office-ai-host",
+  "path": "/PLACEHOLDER/run-install-sh-to-set-this-path/office-ai-host",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://dkeiicfbblhknpcljlgbjhgljepcopll/"
+    "chrome-extension://PLACEHOLDER-RUN-INSTALL-SH-WITH-YOUR-EXTENSION-ID/"
   ]
 }

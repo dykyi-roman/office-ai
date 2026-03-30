@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-active%20development-brightgreen?style=for-the-badge" alt="Status" />
-  <img src="https://img.shields.io/badge/version-0.5.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.6.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/tauri-v2-orange?style=for-the-badge" alt="Tauri" />
   <img src="https://img.shields.io/badge/svelte-5-red?style=for-the-badge" alt="Svelte" />
   <img src="https://img.shields.io/badge/pixi.js-v8-purple?style=for-the-badge" alt="PixiJS" />
@@ -35,6 +35,7 @@
 - [Idle Zones](#idle-zones)
 - [Agent Discovery](#agent-discovery)
 - [Browser Extension](#browser-extension)
+- [IDE Support](#ide-support)
 - [Troubleshooting](#troubleshooting)
 - [Non-Goals](#non-goals)
 - [Roadmap](#roadmap)
@@ -269,6 +270,8 @@ The system uses different detection strategies depending on the agent type:
 | **Claude Code (CLI)**   | Implemented   | Process scanning via `sysinfo` crate. Monitoring `~/.claude/projects/` directory               | Log file parsing: `user_prompt`, `assistant_start`, `tool_use`, `assistant_end`       |
 | **Gemini CLI**          | Implemented   | Process scanning (`gemini`, `node.*gemini`). Monitoring `~/.gemini/tmp/` directory              | JSON-array session parsing: `user`, `gemini`, `info` messages                          |
 | **Codex CLI**           | Implemented   | Process scanning (`codex`). Monitoring `~/.codex/sessions/` directory                          | JSONL parsing: `message`, `function_call_output`, `exec_result` events                 |
+| **Cursor (IDE)**        | Implemented   | Process scanning (`Cursor`) with TTY bypass for GUI apps. Monitoring `~/.cursor/ai-tracking/`  | File activity monitoring: `mtime` changes on AI tracking database                      |
+| **Windsurf (IDE)**      | Implemented   | Process scanning (`Windsurf`) with TTY bypass for GUI apps. Monitoring `~/.codeium/windsurf/cascade/` + `~/.codeium/implicit/` + `~/.codeium/cascade/` | File activity monitoring: `mtime` changes on Codeium protobuf files            |
 | **ChatGPT (Browser)**   | Implemented   | Chrome MV3 extension with DOM MutationObserver on `chatgpt.com`                                | CSS selector detection: stop button, streaming response, code interpreter               |
 | **Gemini (Browser)**    | Implemented   | Chrome MV3 extension with DOM MutationObserver on `gemini.google.com`                          | Web Component attributes: `model-response[loading]`, `mat-progress-spinner`             |
 | **Claude (Browser)**    | Implemented   | Chrome MV3 extension with DOM MutationObserver on `claude.ai`                                  | CSS selector detection: `[data-is-streaming]`, artifact panel, thinking indicator        |
@@ -289,6 +292,26 @@ OfficeAI includes a Chrome MV3 extension that tracks AI agent activity directly 
 - Each browser tab gets a unique agent ID: `browser-{platform}-{hash}` (e.g. `browser-chatgpt-a1b2c3d4`)
 
 For full details — architecture, CSS selectors, detection algorithms, native messaging protocol — see [EXTENSION.md](docs/EXTENSION.md).
+
+---
+
+## IDE Support
+
+OfficeAI natively supports **Cursor** and **Windsurf** — two popular AI-powered code editors. Their built-in AI assistants are detected automatically and appear as office employees, just like CLI agents.
+
+| IDE | Detection | Monitored Paths | State Extraction |
+|-----|-----------|-----------------|------------------|
+| **Cursor** | Process scanning (`Cursor`) with TTY bypass for GUI apps | `~/.cursor/ai-tracking/` | File activity monitoring: `mtime` changes on AI tracking database |
+| **Windsurf** | Process scanning (`Windsurf`) with TTY bypass for GUI apps | `~/.codeium/windsurf/cascade/`, `~/.codeium/implicit/`, `~/.codeium/cascade/` | File activity monitoring: `mtime` changes on Codeium protobuf files |
+
+**How it works:**
+
+- The process scanner detects running Cursor/Windsurf processes via OS process list. GUI apps bypass the TTY filter since they don't have a terminal attached.
+- The log watcher monitors IDE-specific directories for file activity changes (`mtime` polling).
+- Since IDE agents cannot signal task completion explicitly, a **15-second inactivity timeout** is used — if no file changes are detected within 15s, the agent transitions to idle.
+- Each Cursor session gets a unique agent ID: `log-cursor--{session-hash}`. Windsurf uses a fixed ID: `log-windsurf--activity`.
+
+**Setup:** No configuration needed — just launch Cursor or Windsurf and start using their AI features. OfficeAI will detect them automatically.
 
 ---
 
@@ -356,7 +379,7 @@ For full details — architecture, CSS selectors, detection algorithms, native m
 | **Browser extension**  | Chrome MV3 + Native Messaging            |
 | **Config storage**     | TOML (`~/.config/office-ai/config.toml`) |
 | **TS testing**         | Vitest (~411 tests)                      |
-| **Rust testing**       | cargo test (~261 tests)                  |
+| **Rust testing**       | cargo test (~371 tests)                  |
 
 ---
 
