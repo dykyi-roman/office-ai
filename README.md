@@ -11,6 +11,10 @@
   <img src="https://img.shields.io/badge/tests-~672-green?style=for-the-badge" alt="Tests" />
 </p>
 
+<p align="center">
+  <a href="https://dykyi-roman.github.io/projects/office-ai/index.html"><b>🌐 Website</b></a> · <a href="https://github.com/dykyi-roman/office-ai"><b>GitHub</b></a>
+</p>
+
 <h1 align="center">OfficeAI</h1>
 
 <p align="center">
