@@ -17,6 +17,7 @@ const DEFAULTS: Settings = {
   scanInterval: 2,
   maxAgents: 20,
   customLogPaths: "",
+  aiOfficeApiUrl: "https://ai-office-one.vercel.app",
   language: "en",
 };
 
@@ -59,6 +60,10 @@ describe("test_settings_defaults — all settings have correct defaults", () => 
 
   it("customLogPaths defaults to empty string", () => {
     expect(DEFAULTS.customLogPaths).toBe("");
+  });
+
+  it("aiOfficeApiUrl defaults to production AI Office API", () => {
+    expect(DEFAULTS.aiOfficeApiUrl).toBe("https://ai-office-one.vercel.app");
   });
 
   it("language defaults to 'en'", () => {

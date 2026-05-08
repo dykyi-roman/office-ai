@@ -136,6 +136,17 @@
             </label>
           </div>
 
+          <div class="setting-row setting-row--column">
+            <label for="ai-office-api-url" class="setting-label">AI Office API URL</label>
+            <input
+              id="ai-office-api-url"
+              class="input"
+              value={settings.aiOfficeApiUrl}
+              placeholder="https://ai-office-one.vercel.app"
+              oninput={(e) => setSetting("aiOfficeApiUrl", (e.currentTarget as HTMLInputElement).value)}
+            />
+          </div>
+
         </fieldset>
       {/if}
 

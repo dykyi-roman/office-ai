@@ -5,5 +5,6 @@ export { default as StatusBar } from "./StatusBar.svelte";
 export { default as SettingsPanel } from "./SettingsPanel.svelte";
 export { default as AgentMetrics } from "./AgentMetrics.svelte";
 export { default as MiniLog } from "./MiniLog.svelte";
+export { default as AiOfficePanel } from "./AiOfficePanel.svelte";
 
 export * from "./utils";

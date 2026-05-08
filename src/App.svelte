@@ -9,11 +9,13 @@
   import StatusBar from "$lib/ui/StatusBar.svelte";
   import AgentMetrics from "$lib/ui/AgentMetrics.svelte";
   import SettingsPanel from "$lib/ui/SettingsPanel.svelte";
+  import AiOfficePanel from "$lib/ui/AiOfficePanel.svelte";
   import { t } from "$lib/i18n/index";
   import "$lib/ui/styles.css";
 
   // Settings panel visibility
   let settingsOpen = $state(false);
+  let aiOfficeOpen = $state(false);
 
   // PixiJS scene instance
   let scene: OfficeScene | null = null;
@@ -24,6 +26,10 @@
     if ((event.ctrlKey || event.metaKey) && event.key === ",") {
       event.preventDefault();
       settingsOpen = !settingsOpen;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      aiOfficeOpen = !aiOfficeOpen;
     }
   }
 
@@ -101,7 +107,22 @@
     {t("app.settings")}
   </button>
 
+  <button
+    class="ai-office-trigger btn btn--primary"
+    aria-label="Open AI Office"
+    title="AI Office"
+    onclick={() => (aiOfficeOpen = true)}
+  >
+    AI Office
+  </button>
+
 </div>
+
+<!-- AI Office workflow panel -->
+<AiOfficePanel
+  open={aiOfficeOpen}
+  onClose={() => (aiOfficeOpen = false)}
+/>
 
 <!-- Agent sidebar (slide-in from right) -->
 <AgentSidebar />
@@ -157,5 +178,21 @@
     z-index: var(--z-hud);
     pointer-events: all;
     font-size: 12px;
+  }
+
+  .ai-office-trigger {
+    position: fixed;
+    top: 16px;
+    left: 112px;
+    z-index: var(--z-hud);
+    pointer-events: all;
+    font-size: 12px;
+  }
+
+  @media (max-width: 520px) {
+    .ai-office-trigger {
+      top: 54px;
+      left: 16px;
+    }
   }
 </style>

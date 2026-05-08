@@ -21,9 +21,6 @@ import { SpeechBubble } from "./SpeechBubble";
 /** Walking speed in pixels per second */
 const WALK_SPEED_PX = 120;
 
-/** All agents render with the same visual tier (green hoodie) regardless of actual tier */
-const VISUAL_TIER: Tier = "middle";
-
 /** Thinking dot fill colour per tier — must match tierColor() in ui/utils.ts */
 const TIER_DOT_COLOR: Record<Tier, number> = {
   expert: 0xffd700, // gold

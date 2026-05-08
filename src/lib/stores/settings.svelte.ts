@@ -8,6 +8,7 @@ const LOCAL_STORAGE_KEY = "officeai-settings";
 const FRONTEND_ONLY_KEYS: ReadonlySet<keyof Settings> = new Set([
   "language",
   "showPrompts",
+  "aiOfficeApiUrl",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -24,6 +25,7 @@ export interface Settings {
   scanInterval: number;
   maxAgents: number;
   customLogPaths: string;
+  aiOfficeApiUrl: string;
   language: Locale;
 }
 
@@ -37,6 +39,7 @@ const DEFAULTS: Settings = {
   scanInterval: 2,
   maxAgents: 20,
   customLogPaths: "",
+  aiOfficeApiUrl: "https://ai-office-one.vercel.app",
   language: "en",
 };
 
