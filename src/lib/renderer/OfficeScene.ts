@@ -3,7 +3,6 @@
 
 import {
   Application,
-  Assets,
   Container,
   Graphics,
   Sprite,
@@ -13,7 +12,7 @@ import {
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { AgentState, Status, Tier } from "$lib/types/agent";
-import type { OfficeLayout, GridPosition } from "$lib/types/office";
+import type { OfficeLayout, GridPosition, ZoneType } from "$lib/types/office";
 import {
   TAURI_EVENTS,
   type AgentFoundPayload,
@@ -463,7 +462,7 @@ export class OfficeScene {
     // Initialize NPCs
     this.npcManager.destroy();
     if (json.npcs !== undefined && json.npcs.length > 0) {
-      const zonePositions = new Map(
+      const zonePositions: Map<ZoneType, GridPosition> = new Map(
         filteredZones.map((z) => [z.type, z.position])
       );
       this.npcManager.setup(
@@ -686,7 +685,7 @@ export class OfficeScene {
 
     this.maybeSwitchLayout(this.agentSprites.size + 1);
 
-    const sheet = this.agentSheets.get("middle") ?? null;
+    const sheet = this.agentSheets.get(agent.tier) ?? this.agentSheets.get("middle") ?? null;
     const sprite = new AgentSprite(agent, sheet);
     this.agentLayer.addChild(sprite);
     this.agentSprites.set(agent.id, sprite);
@@ -720,7 +719,7 @@ export class OfficeScene {
     // Check if we need to switch layout based on agent count
     this.maybeSwitchLayout(this.agentSprites.size + 1);
 
-    const sheet = this.agentSheets.get("middle") ?? null;
+    const sheet = this.agentSheets.get(agent.tier) ?? this.agentSheets.get("middle") ?? null;
     const sprite = new AgentSprite(agent, sheet);
     this.agentLayer.addChild(sprite);
     this.agentSprites.set(agent.id, sprite);
