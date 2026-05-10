@@ -84,8 +84,36 @@ export const AI_OFFICE_AGENTS: AiOfficeAgent[] = [
     icon: "FIN",
     description: "финансы и сверки",
     action: "проверяет суммы, документы, инвойсы и арифметические расхождения",
-    keywords: ["инвойс", "счёт", "счет", "финанс", "сверк", "ндс", "налог"],
+    keywords: [
+      "инвойс",
+      "счёт",
+      "счет",
+      "финанс",
+      "сверк",
+      "ндс",
+      "налог",
+      "доход",
+      "расход",
+      "прибыл",
+      "убыт",
+      "баланс",
+      "бюджет",
+      "p&l",
+      "pnl",
+      "cash flow",
+      "денежн",
+      "ebitda",
+    ],
   },
+];
+
+const ROUTING_PRIORITY: AiOfficeAgentId[] = [
+  "accountant",
+  "developer",
+  "support",
+  "strategist",
+  "copywriter",
+  "data_analyst",
 ];
 
 export function getAiOfficeAgent(id: string): AiOfficeAgent {
@@ -94,8 +122,8 @@ export function getAiOfficeAgent(id: string): AiOfficeAgent {
 
 export function routeAiOfficeTask(task: string): AiOfficeAgent {
   const normalized = task.toLowerCase();
-  for (const agent of AI_OFFICE_AGENTS) {
-    if (agent.id === "pmo") continue;
+  for (const agentId of ROUTING_PRIORITY) {
+    const agent = getAiOfficeAgent(agentId);
     if (agent.keywords.some((keyword) => normalized.includes(keyword))) {
       return agent;
     }
