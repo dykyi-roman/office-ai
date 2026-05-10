@@ -685,7 +685,7 @@ export class OfficeScene {
 
     this.maybeSwitchLayout(this.agentSprites.size + 1);
 
-    const sheet = this.agentSheets.get("middle") ?? null;
+    const sheet = this.agentSheets.get(agent.tier) ?? this.agentSheets.get("middle") ?? null;
     const sprite = new AgentSprite(agent, sheet);
     this.agentLayer.addChild(sprite);
     this.agentSprites.set(agent.id, sprite);
@@ -719,7 +719,7 @@ export class OfficeScene {
     // Check if we need to switch layout based on agent count
     this.maybeSwitchLayout(this.agentSprites.size + 1);
 
-    const sheet = this.agentSheets.get("middle") ?? null;
+    const sheet = this.agentSheets.get(agent.tier) ?? this.agentSheets.get("middle") ?? null;
     const sprite = new AgentSprite(agent, sheet);
     this.agentLayer.addChild(sprite);
     this.agentSprites.set(agent.id, sprite);
